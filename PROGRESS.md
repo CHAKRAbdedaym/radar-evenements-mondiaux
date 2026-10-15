@@ -7,13 +7,13 @@
 | # | step | status | proof / notes |
 |---|---|---|---|
 | 0 | Environment + team + contract | ✅ done | Docker Engine 27.4.1 (server = Docker Engine), Compose v2.32.1, hello-world OK, ports 5173/8000/8081/27017 free, HTTPS 200 on stream/dumps/fr.wikipedia. git init (author CHAKRAbdedaym). 6 subagents in `.claude/agents/`. `docs/CONTRACT.md` v1.0 written. |
-| 1 | infra (compose, mongo, mongo-express, init script) | ⏳ todo | |
-| 2 | edits-streamer | ⏳ todo | |
-| 3 | diff-worker | ⏳ todo | |
-| 4 | pageviews-loader | ⏳ todo | |
-| 5 | detector | ⏳ todo | |
-| 6 | backend | ⏳ todo | |
-| 7 | frontend + 2 polish rounds | ⏳ todo | |
+| 1 | infra (compose, mongo, mongo-express, init script) | ✅ done | mongo healthy (waits for init), 6 collections + all contract indexes verified, mongo-express 401 without auth / 200 with, both bound to 127.0.0.1. Commit 4997ba5. |
+| 2 | edits-streamer | ✅ done | 1,587 real edits after ~15 min (ar 52/12 bot, fr 137/40, en 995/351), Last-Event-ID checkpoint + resume verified, 0 errors, 28 MiB. |
+| 3 | diff-worker | ✅ done | 1,155 edit_texts (real wikitext added/removed, ar/fr/en), 0 errors, ≤5 req/s. |
+| 4 | pageviews-loader | 🟡 in progress | 1 hour test 2023-09-08T22: 60.6 MB, 7,188,874 lines read, 99,730 rows (min 20), ~52-75 s, re-run skipped. Full 49 h range running in background (log in scratchpad pageviews-full.log). Earthquake titles absent from the 22:00 dump (article created after the quake). |
+| 5 | detector | ✅ done | event-time window, ~380 articles scored/cycle, 0 alerts yet: history 0.14 h → provisoire baseline (median 1) → needs ≥5 edits by ≥3 users in 5 min. Alert path proven on a throwaway db. Article baseline needs ≥6 h of stream. |
+| 6 | backend | ✅ done | all §7 endpoints curl-verified on real data, stats ~6 ms, radar ~14 ms, IXSCAN only, event-time ref (skew 3605 s measured). Replay/pageviews re-check after full load. |
+| 7 | frontend + 2 polish rounds | 🟡 in progress | |
 | 8 | full QA from scratch | ⏳ todo | |
 | 9 | README / docs | ⏳ todo | |
 | 10 | final report | ⏳ todo | |
@@ -38,4 +38,4 @@
 - nothing
 
 ## Next
-- Step 1 (infra-docker) + data-ingestion code in parallel.
+- Running in parallel (background agents): infra-docker (step 1), data-ingestion (steps 2-5 code + 1-hour pageviews test), backend-api (step 6), frontend-ui (step 7). Then: review each, full pageviews range, qa-verifier screenshots, polish rounds.
