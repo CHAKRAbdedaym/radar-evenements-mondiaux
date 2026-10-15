@@ -1,329 +1,477 @@
-# Radar d'événements mondiaux
+# 🛰️ Radar d'événements mondiaux
 
-Projet Big Data — FST Marrakech (module Big Data).
+> Projet Big Data — FST Marrakech, module Big Data (projet d'équipe).
+> Quand un événement majeur arrive (séisme, décès, match, élection), les articles Wikipédia liés reçoivent **soudain beaucoup de modifications et de vues, souvent avant les médias**.
+> Notre système **surveille Wikipédia en temps réel** (arabe, français, anglais), **compare** l'activité de chaque article à son activité habituelle et **signale les pics anormaux**.
+> Toutes les données sont **réelles** (Wikimedia) et **stockées dans MongoDB**.
 
-Quand un événement majeur arrive (séisme, décès, match, élection), les articles Wikipédia liés reçoivent soudain beaucoup de modifications et de vues, souvent avant les médias. Ce projet surveille en temps réel Wikipédia (arabe, français, anglais), compare l'activité de chaque article à son activité habituelle et signale les pics anormaux.
+**Les autres documents :**
 
-## Architecture
-
-Phase actuelle : **Wikimédia → Python (ingestion) → MongoDB → FastAPI → React**. À venir : Kafka, Spark, HDFS.
-
-```
- Wikimédia                     Python (ingestion)                MongoDB           FastAPI            React
- ─────────                     ──────────────────                ───────           ───────            ─────
- EventStreams  ──────────────▶ edits-streamer ──┐
- API compare   ──────────────▶ diff-worker  ────┼──────────────▶  base radar  ──▶  backend  ──▶  frontend
- Dumps pages vues ───────────▶ pageviews-loader ┤                                 (/api)        (nginx :5173)
-                               detector ────────┘
-                                                        ┄┄ à venir : Kafka ┄┄ Spark ┄┄ HDFS ┄┄
-```
-
-| Service Docker | Rôle |
+| Fichier | Contenu |
 |---|---|
-| `mongo` | Base MongoDB 7 (`radar`), index créés au premier démarrage. Accessible seulement sur `127.0.0.1:27017`. |
-| `mongo-express` | Interface web pour explorer MongoDB (`127.0.0.1:8081`, identifiants `ME_USER` / `ME_PASSWORD`). |
-| `edits-streamer` | Lit le flux live des modifications Wikipédia (ar, fr, en) et les écrit dans `edits`. |
-| `diff-worker` | Pour chaque modification, récupère le texte ajouté et retiré (API `compare`) et l'écrit dans `edit_texts`. |
-| `detector` | Calcule le z-score de chaque article actif toutes les minutes et crée les `alerts`. |
-| `pageviews-loader` | Outil ponctuel (profil `batch`) : charge les vues horaires Wikimédia dans `pageviews`. |
-| `backend` | API FastAPI (`/api`), documentation sur `/docs`. |
-| `frontend` | Application React (Vite, Tailwind, Recharts) servie par nginx, qui redirige `/api/` vers le backend. |
-| `qa` | Tests visuels Playwright (profil `qa`, optionnel). |
+| [`RUN.md`](RUN.md) | Comment installer, lancer, arrêter et dépanner le projet |
+| [`MONGO.md`](MONGO.md) | Comment accéder à MongoDB, voir les données et les montrer à la professeure |
+| [`APP.md`](APP.md) | Les 7 pages de l'application web, expliquées une par une |
+| [`docs/CONTRACT.md`](docs/CONTRACT.md) | Contrat technique : schémas MongoDB, index, API (référence pour le code) |
 
-## Prérequis
+---
 
-- **Docker Engine** et **Docker Compose v2** (`docker compose version` doit répondre).
-- **Fedora / SELinux** : les montages de volumes doivent avoir le suffixe `:Z` (déjà présent dans `docker-compose.yml`). Ne pas utiliser `sudo`.
-- **Environ 2 Go de disque** pour la démo (les volumes Docker et les données chargées).
-- **Connexion internet** (flux Wikimédia, dumps de vues).
+## Sommaire
 
-## Démarrage
+1. [L'idée en une minute](#1-lidée-en-une-minute)
+2. [Ce que nous avons construit](#2-ce-que-nous-avons-construit)
+3. [Architecture](#3-architecture)
+4. [Les 3 sources de données (réelles)](#4-les-3-sources-de-données-réelles)
+5. [Le pipeline, étape par étape](#5-le-pipeline-étape-par-étape)
+6. [MongoDB : les données stockées](#6-mongodb--les-données-stockées)
+7. [Le détecteur d'anomalies (z-score)](#7-le-détecteur-danomalies-z-score)
+8. [Le cas réel : le séisme d'Al Haouz](#8-le-cas-réel--le-séisme-dal-haouz)
+9. [Big Data : les 3 V et les données non structurées](#9-big-data--les-3-v-et-les-données-non-structurées)
+10. [Problèmes rencontrés et solutions](#10-problèmes-rencontrés-et-solutions)
+11. [Données de démonstration vs échelle réelle (30 Go de disque)](#11-données-de-démonstration-vs-échelle-réelle-30-go-de-disque)
+12. [Résultats chiffrés](#12-résultats-chiffrés)
+13. [Limites connues](#13-limites-connues)
+14. [Suite du projet : Kafka, Spark, HDFS](#14-suite-du-projet--kafka-spark-hdfs)
+15. [Organisation du dépôt](#15-organisation-du-dépôt)
+16. [Démo en 5 minutes](#16-démo-en-5-minutes)
+17. [Questions probables et réponses](#17-questions-probables-et-réponses)
+18. [Sources et liens](#18-sources-et-liens)
 
-```bash
-cp .env.example .env
+---
+
+## 1. L'idée en une minute
+
+**Problème.** Quand un événement important se produit, il faut du temps pour qu'il soit repéré, vérifié et publié par les médias.
+
+**Observation.** Wikipédia réagit très vite : des milliers de bénévoles modifient les articles liés à l'événement dans les minutes qui suivent, et des milliers de lecteurs les consultent.
+Exemple réel (nos données) : le **8 septembre 2023 à 22:11 UTC**, un séisme de magnitude 6,8 frappe la région d'Al Haouz. L'article anglais passe de **0 vue** (il n'existait pas) à **1 579 vues par heure** à minuit UTC.
+
+**Solution.** Un « radar » qui :
+1. **écoute en direct** toutes les modifications de Wikipédia en arabe, français et anglais ;
+2. **stocke** ces données dans MongoDB (3 types de données : semi-structurées, non structurées, structurées) ;
+3. **calcule** pour chaque article un score d'anomalie (z-score) toutes les 60 secondes ;
+4. **affiche** le tout dans une application web : radar animé, alertes, historique, recherche, exploration de la base.
+
+---
+
+## 2. Ce que nous avons construit
+
+| Brique | Rôle | Technologie |
+|---|---|---|
+| **edits-streamer** | Reçoit le flux temps réel des modifications Wikipédia et l'écrit dans MongoDB | Python 3.11 (SSE) |
+| **diff-worker** | Récupère le **texte** ajouté/retiré par chaque modification humaine | Python 3.11 (API MediaWiki) |
+| **pageviews-loader** | Charge les fichiers horaires de **vues** des articles (millions de lignes par heure) | Python 3.11 (streaming gzip) |
+| **detector** | Calcule le z-score de chaque article actif et crée les **alertes** | Python 3.11 + agrégations MongoDB |
+| **MongoDB** | Stocke toutes les données (base `radar`, 6 collections, index) | MongoDB 7 |
+| **mongo-express** | Interface web pour voir la base | mongo-express |
+| **backend** | API REST qui lit MongoDB (pipelines d'agrégation) | FastAPI + Motor |
+| **frontend** | Application web en français (7 pages) | React + Vite + TypeScript + Tailwind + Recharts, servie par nginx |
+
+Tout tourne dans **Docker** : une seule commande lance tout (`docker compose up -d --build`, voir [`RUN.md`](RUN.md)).
+
+---
+
+## 3. Architecture
+
+### Phase actuelle (ce qui fonctionne aujourd'hui)
+
+```
+                 ┌──────────────────────── Wikimedia (données réelles) ────────────────────────┐
+                 │                                                                             │
+   Flux EventStreams (temps réel)     API action=compare (texte)        Dumps pageviews (fichiers horaires)
+                 │                               │                                   │
+                 ▼                               ▼                                   ▼
+        ┌────────────────┐             ┌────────────────┐                 ┌────────────────────┐
+        │ edits-streamer │             │  diff-worker   │                 │  pageviews-loader  │
+        └───────┬────────┘             └───────┬────────┘                 └─────────┬──────────┘
+                │ edits                        │ edit_texts                         │ pageviews
+                ▼                              ▼                                    ▼
+        ┌──────────────────────────────────────────────────────────────────────────────────┐
+        │                         MongoDB 7 — base « radar »                               │
+        │   edits · edit_texts · pageviews · alerts · scores · ingestion_log              │
+        └───────┬───────────────────────────────▲───────────────────────────┬─────────────┘
+                │                               │ alerts, scores            │
+                │                       ┌───────┴────────┐                  │
+                │                       │    detector    │ (toutes les 60 s)│
+                │                       └────────────────┘                  │
+                ▼                                                           ▼
+        ┌────────────────┐        ┌────────────────────────┐        ┌────────────────┐
+        │ backend FastAPI│ ─────▶ │ frontend React (nginx) │        │ mongo-express  │
+        │   :8000/api    │  JSON  │        :5173           │        │     :8081      │
+        └────────────────┘        └────────────────────────┘        └────────────────┘
 ```
 
-Éditer `.env` :
+**Principe important :** l'ingestion (Python) est **séparée** du stockage (MongoDB). Chaque service ne fait qu'une chose. C'est ce qui permettra d'ajouter **Kafka** entre l'ingestion et le stockage, puis **Spark** à la place du détecteur, sans tout réécrire.
 
-- `WIKI_USER_AGENT` : mettre un **email de contact réel** à la place de `EMAIL_HERE`. Sans contact, Wikimédia répond HTTP 429 et le chargeur refuse de démarrer.
-- `ME_PASSWORD` : mot de passe de mongo-express (obligatoire, Compose refuse de démarrer sans).
-
-Puis :
-
-```bash
-docker compose up -d --build
-docker compose ps
-```
-
-Au bout de quelques dizaines de secondes, `mongo`, `backend` et `frontend` doivent être `healthy`.
-
-## Charger les vues (pageviews)
-
-Les vues horaires viennent des dumps Wikimédia (un fichier `.gz` par heure, environ 60 Mo chacun). Le chargeur les lit en flux, sans rien écrire sur le disque.
-
-```bash
-docker compose --profile batch run --rm pageviews-loader --start 2023-09-08T12 --end 2023-09-10T12
-```
-
-- `--start` et `--end` : heures UTC au format `AAAA-MM-JJTHH`, bornes incluses. Par défaut : `2023-09-08T12` → `2023-09-10T12` (49 heures).
-- `--force` : refait les heures déjà chargées.
-- `--min-views N` : garde les lignes avec au moins N vues (défaut : `PAGEVIEWS_MIN_VIEWS` dans `.env`). Les titres de la liste de surveillance du séisme sont toujours gardés.
-
-**Relancer est sans risque.** Chaque heure terminée est marquée `done` dans `ingestion_log` et ignorée au prochain lancement. Une heure en erreur est retentée. Les écritures sont des upserts, donc rejouer ne crée pas de doublons.
-
-**Parallélisme** : au maximum 2 heures téléchargées en même temps (limite Wikimédia).
-
-**Suivi** : toutes les 10 secondes, une ligne de progression :
+### Phases suivantes (à venir)
 
 ```
-pageviews:2023-09-08T21 progress: 1.7 MB, lines read=200000 kept=144787, rows written=0, elapsed 360s
+Wikimedia → Python → [ Kafka ] → [ Spark Streaming ] → MongoDB / [ HDFS ] → FastAPI → React
 ```
 
-Puis une ligne de fin par heure, par exemple :
+### Les services Docker
 
-```
-pageviews:2023-09-08T22 DONE: 60.6 MB, lines read=7188874 kept=3063660 bad=0 rows written=99730 in 52.4s
-```
+| Service | Port (machine) | Rôle | Redémarrage |
+|---|---|---|---|
+| `mongo` | `127.0.0.1:27017` | Base de données (volume nommé `mongo-data`) | healthcheck |
+| `mongo-express` | `127.0.0.1:8081` | Interface web MongoDB (login/mot de passe dans `.env`) | — |
+| `edits-streamer` | — | Flux temps réel → `edits` | `unless-stopped` |
+| `diff-worker` | — | Texte des modifications → `edit_texts` | `unless-stopped` |
+| `detector` | — | z-score → `scores`, `alerts` | `unless-stopped` |
+| `pageviews-loader` | — | Chargement des vues (lancé à la demande, profil `batch`) | une fois |
+| `backend` | `8000` | API FastAPI (`/docs` = documentation interactive) | healthcheck |
+| `frontend` | `5173` | Application web (nginx, proxy `/api` → backend) | healthcheck |
+| `qa` | — | Tests et captures (profil `qa`, image Playwright) | une fois |
 
-## Données de démonstration et échelle réelle (important)
+---
 
-Mesures réelles sur **une heure** (2023-09-08 22:00 UTC) :
+## 4. Les 3 sources de données (réelles)
+
+Toutes sont **gratuites, publiques, sans clé**. Wikimedia exige seulement un **User-Agent avec un contact** (sinon : erreur HTTP 429). Le nôtre est dans `.env` (`WIKI_USER_AGENT`).
+
+### A. Le flux des modifications — EventStreams (temps réel)
+
+- URL : `https://stream.wikimedia.org/v2/stream/recentchange`
+- Format : **Server-Sent Events** (une connexion HTTP qui reste ouverte, un événement JSON par modification, sur **tous** les wikis du monde : environ 30 à 60 événements par seconde).
+- Nous gardons : `arwiki`, `frwiki`, `enwiki` ; types `edit` (modification) et `new` (création) ; espace de noms 0 (les articles, pas les pages de discussion).
+- Nous gardons le champ `bot` pour séparer robots et humains.
+- **Type de données : semi-structuré (JSON).**
+
+### B. Le texte des modifications — API `action=compare`
+
+- URL : `https://{lang}.wikipedia.org/w/api.php?action=compare&fromrev={ancienne}&torev={nouvelle}&format=json`
+- Renvoie la différence entre deux versions d'un article (en HTML). Nous enlevons le HTML et gardons le **texte ajouté** et le **texte retiré**.
+- Seulement les modifications **humaines** (pas les bots). Priorité : arabe et français d'abord, puis les articles actifs sur le radar.
+- Limité à **5 requêtes par seconde** (respect de Wikimedia).
+- **Type de données : non structuré (texte libre, wikitexte).**
+
+### C. Les vues des articles — dumps « pageviews » (gros volume)
+
+- URL : `https://dumps.wikimedia.org/other/pageviews/{AAAA}/{AAAA-MM}/pageviews-{AAAAMMJJ}-{HH}0000.gz`
+- Un fichier compressé **par heure**, environ **45 à 70 Mo**, environ **5 à 8,5 millions de lignes**.
+- Une ligne = `domaine titre_article nombre_de_vues taille` (exemple : `fr Séisme_de_2023_au_Maroc 57 0`).
+- Nous gardons `ar`, `fr`, `en` et leurs versions mobiles (`ar.m`, `fr.m`, `en.m`), et nous **additionnons ordinateur + mobile** pour chaque article et chaque heure.
+- **Type de données : structuré (une table : langue, titre, heure, vues).**
+
+---
+
+## 5. Le pipeline, étape par étape
+
+### 5.1 `edits-streamer` — écouter Wikipédia en direct
+
+1. Ouvre une connexion SSE vers EventStreams (avec notre User-Agent).
+2. Lit chaque événement, garde seulement ar/fr/en, `edit`/`new`, articles.
+3. Transforme l'événement en document (titre, langue, utilisateur, bot, horodatage, tailles avant/après, différence en octets, lien).
+4. Écrit **par lots** (100 événements ou toutes les 2 secondes) avec des **upserts** : relancer ne crée jamais de doublon.
+5. Mémorise le **dernier identifiant d'événement** (`Last-Event-ID`) dans `ingestion_log`. Après une coupure (réseau, redémarrage), il **reprend exactement où il s'était arrêté** : aucune modification perdue.
+6. En cas d'erreur réseau : nouvelle tentative avec un délai croissant (1 s → 60 s).
+
+### 5.2 `diff-worker` — récupérer le texte
+
+1. Regarde toutes les 2 secondes les nouvelles modifications humaines sans texte.
+2. Les met dans une **file d'attente bornée** (2 000 maximum) avec priorités : ar/fr > articles actifs sur le radar > reste de l'anglais.
+3. Appelle l'API `compare` (5 par seconde au maximum), enlève le HTML, sépare **ajouté** / **retiré**.
+4. Écrit dans `edit_texts` (index texte pour la recherche).
+5. Les erreurs (révision supprimée, etc.) sont notées et ignorées ; un HTTP 429 fait patienter le temps demandé.
+
+### 5.3 `pageviews-loader` — charger les vues horaires
+
+Commande : `docker compose --profile batch run --rm pageviews-loader --start 2023-09-08T12 --end 2023-09-10T12`
+
+1. Pour chaque heure, télécharge le fichier `.gz` **en flux** : il est décompressé et lu **ligne par ligne**, sans jamais être enregistré sur le disque ni chargé entièrement en mémoire.
+2. Garde les 6 domaines ar/fr/en (+ mobile) et additionne ordinateur + mobile.
+3. Garde les lignes avec **au moins 20 vues** (`PAGEVIEWS_MIN_VIEWS`, voir section 11) — **sauf** les titres du séisme, toujours gardés.
+4. Écrit par paquets de **5 000** (upserts, aucun doublon possible grâce à l'index unique `lang + title + hour`).
+5. **2 heures en parallèle au maximum** (limite de Wikimedia).
+6. Note chaque heure dans `ingestion_log` (lignes lues, gardées, écrites, Mo, durée). Une heure déjà faite est **sautée** si on relance.
+
+### 5.4 `detector` — trouver les pics
+
+Toutes les 60 secondes (détails en section 7) : compte les modifications de chaque article sur les 5 dernières minutes, compare à son activité habituelle, calcule un **z-score**, enregistre le score (`scores`) et crée une **alerte** (`alerts`) si le pic est anormal.
+
+### 5.5 `backend` — l'API
+
+FastAPI + Motor (pilote MongoDB asynchrone). Chaque page de l'application appelle un ou plusieurs endpoints. Les calculs sont faits **dans MongoDB** avec des **pipelines d'agrégation** (`$match`, `$group`, `$dateTrunc`, `$facet`…) qui utilisent les index (vérifié avec `explain()` : aucun parcours complet de collection). Les réponses prennent entre **3 et 100 ms**.
+
+Documentation interactive : http://localhost:8000/docs
+
+| Endpoint | Ce qu'il renvoie |
+|---|---|
+| `/api/health` | État de l'API et de MongoDB |
+| `/api/stats` | Compteurs : documents par collection, taille de la base, modifs/min, bots, etc. |
+| `/api/edits/recent` | Dernières modifications |
+| `/api/edits/top` | Articles les plus modifiés |
+| `/api/edits/timeline` | Modifications par minute et par langue |
+| `/api/radar` | Articles actifs des 5 dernières minutes (avec z-score) |
+| `/api/alerts` | Alertes |
+| `/api/articles/{lang}/{titre}` | Tout sur un article (modifs, textes, vues, alertes) |
+| `/api/pageviews/{lang}/{titre}` | Vues horaires d'un article |
+| `/api/pageviews/top` | Articles les plus vus d'une heure |
+| `/api/replay/alhaouz` | Les 3 courbes du séisme |
+| `/api/search?q=` | Recherche plein texte dans les textes ajoutés |
+| `/api/explorer/{collection}` | Documents bruts d'une collection (lecture seule, liste autorisée) |
+
+### 5.6 `frontend` — l'application
+
+7 pages en français (détails dans [`APP.md`](APP.md)) : Radar en direct, Alertes, Article, Rejouer le séisme, Explorateur de données, Recherche, Le projet.
+
+---
+
+## 6. MongoDB : les données stockées
+
+Base `radar`, 6 collections. Toutes les explications d'accès et les requêtes sont dans [`MONGO.md`](MONGO.md).
+
+| Collection | Type de données | Source | Contenu |
+|---|---|---|---|
+| `edits` | **Semi-structuré** (JSON) | EventStreams | 1 document = 1 modification Wikipédia |
+| `edit_texts` | **Non structuré** (texte) | API compare | Texte ajouté / retiré par une modification humaine |
+| `pageviews` | **Structuré** (table) | Dumps horaires | Vues par langue, article et heure |
+| `alerts` | Système | Détecteur | Pics anormaux détectés |
+| `scores` | Système | Détecteur | Dernier z-score de chaque article actif (expire après 1 h) |
+| `ingestion_log` | Système | Tous | Progression du chargement et points de reprise |
+
+Les **index** sont créés automatiquement au premier démarrage par `mongo/init/01-init.js` (index par date, par langue + titre + date, index unique pour les vues, index texte pour la recherche, index TTL pour les scores).
+
+---
+
+## 7. Le détecteur d'anomalies (z-score)
+
+**Question :** « Cet article est-il beaucoup plus modifié que d'habitude ? »
+
+1. **Fenêtre actuelle** : les 5 dernières minutes. Pour chaque article : nombre de modifications humaines, nombre de contributeurs **différents**, octets ajoutés.
+2. **Activité habituelle (baseline)** : les 24 heures précédentes de l'article, découpées en tranches de 5 minutes → moyenne et écart-type.
+3. **Z-score** :
+
+   ```
+   z = (modifications des 5 dernières minutes − moyenne habituelle) / max(écart-type, 1)
+   ```
+
+   z = 3 veut dire : « 3 écarts-types au-dessus de la normale ».
+4. **Alerte** si `z > 3` **et** au moins **3 contributeurs différents** (pour éviter qu'une seule personne qui enregistre souvent ne crée une fausse alerte). Les deux seuils sont dans `.env` (`Z_THRESHOLD`, `MIN_USERS`).
+5. **Pas de doublon** : pas de nouvelle alerte pour le même article pendant 15 minutes.
+6. **Baseline « provisoire »** : tant que nous n'avons pas 6 heures d'historique, nous ne connaissons pas encore l'activité habituelle de chaque article. Le détecteur utilise alors la **médiane globale** de tous les articles et marque l'alerte « provisoire ».
+
+**Exemple réel (nos données) :** l'article anglais *2026 American League Championship Series* : 5 modifications par 3 contributeurs en 5 minutes, alors que la normale est 1 ± 0,48 → **z = 4,0** → alerte.
+
+**Temps de l'événement (event time).** Le détecteur ne se fie pas à l'horloge de la machine : il prend comme « maintenant » l'horodatage de la **dernière modification reçue** (horloge de Wikimedia). C'est exactement le principe des *watermarks* de Spark Streaming. Pourquoi : voir section 10.
+
+> Ce détecteur Python est une **première version**. Dans la phase suivante, **Spark Streaming** le remplacera.
+
+---
+
+## 8. Le cas réel : le séisme d'Al Haouz
+
+Le **8 septembre 2023 à 22:11 UTC**, un séisme de magnitude **6,8** (USGS) frappe la région d'Al Haouz, au sud de Marrakech.
+
+**Trouver les bons articles (sans deviner).** Nous avons utilisé l'API MediaWiki (recherche + liens entre langues + redirections), puis l'API des vues pour savoir **quel titre** recevait les vues en septembre 2023 (les articles ont été renommés depuis) :
+
+| Langue | Titre aujourd'hui | Titre à l'époque | Vues le 9 septembre 2023 |
+|---|---|---|---|
+| ar | زلزال الحوز 2023 | زلزال مراكش-آسفي 2023 | 11 838 |
+| fr | Séisme de 2023 au Maroc | Séisme de 2023 au Maroc | 33 096 |
+| en | 2023 Al Haouz earthquake | 2023 Marrakesh-Safi earthquake | 85 857 |
+
+Les vues d'une **redirection** sont comptées sous le nom de la redirection : nous additionnons donc l'article + ses redirections (liste dans `ingestion/config/watchlist.json`).
+
+**Ce que montrent nos données (vues par heure, ordinateur + mobile) :**
+
+| Heure (UTC) | en | fr | ar |
+|---|---|---|---|
+| 08/09 20:00 et 21:00 | 0 | 0 | 0 |
+| 08/09 22:00 (séisme à 22:11) | 0 | 0 | 0 |
+| 08/09 23:00 | 261 | 0 | 0 |
+| 09/09 00:00 | **1 579** | 57 | 0 |
+| 09/09 01:00 | 1 023 | **230** | 18 |
+| 09/09 02:00 | 1 063 | 221 | 188 |
+| 09/09 03:00 | 1 556 | 188 | **225** |
+
+Avant 22:11, l'article n'existait pas : **0 vue**. Une heure après, il est consulté plus de **1 500 fois par heure** en anglais. C'est **exactement le pic que notre radar doit détecter**.
+
+Bonus : à minuit UTC, dans le top des articles français les plus vus, on trouve **« Séisme » (8 698 vues)** et **« Séisme de 1960 à Agadir » (3 991 vues)** : les lecteurs cherchent à comprendre ce qui se passe.
+
+---
+
+## 9. Big Data : les 3 V et les données non structurées
+
+| V | Ce que cela veut dire | Comment nous le couvrons (chiffres réels) |
+|---|---|---|
+| **Volume** | Beaucoup de données | Les dumps de vues : **5 à 8,5 millions de lignes par heure**. Pour nos 10 heures chargées : **65 968 317 lignes lues**, **554 Mo** téléchargés en flux, **904 116 documents** écrits. |
+| **Vélocité** | Données qui arrivent vite, en continu | Le flux EventStreams : **30 à 60 événements par seconde** sur tous les wikis, filtrés en direct ; environ **130 modifications par minute** gardées (ar/fr/en). Le détecteur recalcule toutes les 60 s. |
+| **Variété** | Données de formes différentes | **Semi-structuré** (`edits`, JSON), **non structuré** (`edit_texts`, texte libre), **structuré** (`pageviews`, table). |
+
+**Données non structurées :** le texte ajouté par les contributeurs n'a pas de schéma (phrases, wikitexte, liens, modèles, plusieurs alphabets). Nous le stockons tel quel et MongoDB l'indexe (**index texte**) pour permettre la recherche plein texte (page Recherche).
+
+**Pourquoi MongoDB :** des documents JSON qui n'ont pas tous les mêmes champs (une création n'a pas d'« ancienne version »), du texte libre et des tables : un seul système souple gère les trois, avec des index et un langage d'agrégation puissant.
+
+---
+
+## 10. Problèmes rencontrés et solutions
+
+| Problème | Ce qui se passait | Solution |
+|---|---|---|
+| **HTTP 429 de Wikimedia** | Requêtes refusées (« trop de requêtes ») | User-Agent descriptif avec email de contact (règle Wikimedia), limite de 5 requêtes/s, respect de `Retry-After`. |
+| **Horloge de la machine fausse** | L'ordinateur avait **1 heure de retard** sur l'heure réelle (NTP désactivé). Les fenêtres « 5 dernières minutes » étaient fausses. | Tout le système utilise le **temps de l'événement** : « maintenant » = dernière modification reçue (horloge de Wikimedia). Le système est juste même si l'horloge de la machine est fausse (même principe que Spark). |
+| **Connexion internet très lente** (parfois 7 Ko/s, coupures DNS) | Téléchargements des vues interrompus, flux en retard | Nouvelles tentatives limitées (5 maximum), heures en échec marquées « error » et reprises plus tard ; le flux reprend avec `Last-Event-ID` (aucune perte) ; l'application affiche honnêtement « Connexion lente : flux en retard » et « Données jusqu'à HH:MM UTC ». |
+| **Alerte en double** | Le flux s'était arrêté pendant la coupure : 15 minutes d'horloge passaient sans que le temps des événements avance, et le même pic était signalé 2 fois. | Le délai anti-doublon est maintenant mesuré en **temps de l'événement** (`window_end`). Doublon supprimé. |
+| **Disque limité (30 Go libres)** | Les vues complètes = ~116 millions de documents (> 15 Go) | Jeu de données « moyen » pour la démo (≥ 20 vues/heure), voir section 11. |
+| **Titres renommés** | Les articles du séisme ont changé de nom depuis 2023 | Recherche du titre de l'époque avec l'API des vues + addition des redirections. |
+| **Identifiants de révision** | Un numéro de révision n'est unique que dans **un** wiki | `_id` de `edit_texts` = `"fr:240407042"` (langue + révision). |
+| **SELinux (Fedora)** | Les montages de dossiers sont bloqués par défaut | Suffixe `:Z` sur les montages, et images construites avec `COPY`. |
+| **Dates des fichiers vs titres** | Les dumps utilisent `_` au lieu des espaces | Les titres sont normalisés (`_` → espace) partout. |
+
+---
+
+## 11. Données de démonstration vs échelle réelle (30 Go de disque)
+
+Mesure réelle sur **une heure** (8 septembre 2023, 22:00 UTC) :
 
 | Étape | Valeur |
 |---|---|
-| Taille du fichier compressé | 60,6 Mo |
+| Fichier compressé | 60,6 Mo |
 | Lignes lues | 7 188 874 |
-| Lignes des domaines ar/fr/en (mobile + ordinateur) | 3 063 660 |
-| Lignes ar/fr/en après fusion ordinateur + mobile | 2 421 652 |
-| Lignes gardées avec au moins 20 vues | **99 730** |
+| Lignes ar/fr/en (ordinateur + mobile) | 3 063 660 |
+| Articles ar/fr/en après fusion ordinateur + mobile | 2 421 652 |
+| … avec au moins 5 vues | 424 282 |
+| … avec au moins 20 vues (**gardées**) | **99 730** |
 
-**Pour la démo**, on garde `PAGEVIEWS_MIN_VIEWS=20` : environ 100 000 lignes par heure, soit environ 5 millions de documents pour les 49 heures. Chaque ligne est quand même lue et comptée.
+**À l'échelle réelle**, les 49 heures de la période du séisme représentent environ **116 millions de documents** (plus de **15 Go** avec les index). Notre machine n'a qu'environ **30 Go de disque libre** et 7,6 Go de mémoire. Pour la démonstration, nous gardons donc les articles avec **au moins 20 vues par heure** (`PAGEVIEWS_MIN_VIEWS=20`) :
 
-**À l'échelle réelle**, les 48 heures complètes représentent environ **116 millions de documents** (plus de 15 Go). C'est trop pour notre machine (environ 30 Go de disque libre, 7,6 Go de RAM). Pour lancer l'échelle réelle :
+- **toutes les lignes sont quand même lues et comptées** (le volume est bien traité) ;
+- les titres du séisme sont **toujours gardés**, même avec moins de 20 vues ;
+- à cause d'une connexion très lente, **10 heures** sont chargées pour la démo : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC (avant et après le séisme).
 
-1. Mettre `PAGEVIEWS_MIN_VIEWS=1` dans `.env` (ou ajouter `--min-views 1`).
-2. Ajouter `--force` si certaines heures sont déjà chargées avec un seuil plus élevé.
-3. Disposer d'un disque d'au moins **50 Go**.
-
-C'est précisément le rôle des prochaines phases : **HDFS** pour stocker les données brutes et **Spark** pour les traiter.
-
-À noter : le flux live garde **toutes** les modifications (aucun filtre, sauf les langues ar/fr/en et l'espace de noms 0, c'est-à-dire les articles).
-
-## URLs
-
-| Quoi | Adresse | Remarque |
-|---|---|---|
-| Application | http://localhost:5173 | Interface principale |
-| Documentation API | http://localhost:8000/docs | Swagger de FastAPI |
-| mongo-express | http://localhost:8081 | Identifiants `ME_USER` / `ME_PASSWORD` de `.env` |
-| MongoDB | `127.0.0.1:27017` | Pas d'authentification (accès local uniquement) |
-
-## Les collections et leurs types de données
-
-| Collection | Type de données | Contenu | Clés et index principaux |
-|---|---|---|---|
-| `edits` | **Semi-structuré** (JSON) | Une modification Wikipédia par document (flux EventStreams) : titre, langue, utilisateur, bot, taille, horodatage | `_id` (uuid de l'événement) ; `{timestamp:-1}`, `{lang:1,title:1,timestamp:-1}`, `{bot:1,timestamp:-1}`, `{ingested_at:-1}` |
-| `edit_texts` | **Non structuré** (texte) | Texte ajouté et retiré par modification (API `compare`), commentaire | `_id` = `"fr:123457"` ; index texte `text_search` sur `added_text` et `comment` ; `{timestamp:-1}`, `{lang:1,title:1,timestamp:-1}` |
-| `pageviews` | **Structuré** (table) | Vues par langue, article et heure (`lang`, `title`, `hour`, `views`) | Unique `{lang:1,title:1,hour:1}` ; `{hour:1,views:-1}` |
-| `alerts` | Système (détecteur) | Pics détectés : fenêtre, nombre de modifications, utilisateurs, z-score | `{created_at:-1}`, `{lang:1,title:1,created_at:-1}`, `{z_score:-1}` |
-| `scores` | Système (détecteur) | Dernier z-score de chaque article actif (expire après 1 h) | `_id` = `"en:Titre"` ; TTL sur `computed_at` |
-| `ingestion_log` | Système (suivi) | Progression du chargeur de vues et points de reprise des services | `{source:1,hour:1}` |
-
-## 6 requêtes mongosh à montrer en direct
-
-Ouvrir le shell :
+**Pour lancer l'échelle réelle** (sur une machine avec ≥ 50 Go de disque et une bonne connexion) :
 
 ```bash
-docker compose exec mongo mongosh radar
+# dans .env : PAGEVIEWS_MIN_VIEWS=1
+docker compose --profile batch run --rm pageviews-loader --start 2023-09-08T12 --end 2023-09-10T12 --min-views 1 --force
 ```
 
-Les requêtes ci-dessous ont été exécutées sur les données réelles. Les sorties sont des exemples du 15/10/2026 : elles changent avec le flux.
+C'est justement le rôle des phases suivantes : **HDFS** pour stocker les fichiers bruts complets et **Spark** pour les traiter en parallèle.
 
-**1. Top 10 des articles les plus modifiés dans la dernière heure (sans bots)**
+Le **flux en direct**, lui, garde **toutes** les modifications ar/fr/en (aucun seuil).
 
-La référence de temps est la dernière modification reçue (temps de l'événement, voir section 10).
+---
 
-```js
-const ref = db.edits.find().sort({timestamp:-1}).limit(1).next().timestamp;
-db.edits.aggregate([
-  {$match: {bot: false, timestamp: {$gte: new Date(ref.getTime() - 3600000)}}},
-  {$group: {_id: {lang: "$lang", title: "$title"}, edits: {$sum: 1}, users: {$addToSet: "$user"}}},
-  {$project: {_id: 0, lang: "$_id.lang", title: "$_id.title", edits: 1, distinct_users: {$size: "$users"}}},
-  {$sort: {edits: -1, distinct_users: -1}},
-  {$limit: 10}
-]).toArray()
-```
+## 12. Résultats chiffrés
 
-Sortie (extrait) :
+État de la base le 16/10/2026 (ces chiffres augmentent tant que le flux tourne) :
 
-```
-{ edits: 15, lang: 'en', title: '2026 American League Championship Series', distinct_users: 3 }
-{ edits: 13, lang: 'en', title: '2026 LSU Tigers football team', distinct_users: 2 }
-{ edits: 13, lang: 'ar', title: 'شيفاكومارا سوامي', distinct_users: 1 }
-```
+| Mesure | Valeur |
+|---|---|
+| Modifications stockées (`edits`) | 15 694 (en 11 347 · ar 2 414 · fr 1 933) |
+| Dont bots / humains | 5 674 / 10 020 |
+| Textes de modifications (`edit_texts`) | 8 180 (96,6 % avec du texte ajouté) |
+| Lignes de vues (`pageviews`) | 904 116 (10 heures) |
+| Lignes de dumps lues | 65 968 317 (554 Mo téléchargés en flux) |
+| Alertes | 3 (sur 2 articles) |
+| Taille de la base | 98,7 Mo de données, 41,4 Mo sur disque (compression), 63,3 Mo d'index |
+| Temps de réponse de l'API | 3 à 100 ms |
+| Tests automatiques de l'API | 2 305 vérifications OK |
 
-**2. Modifications par langue (dernière heure)**
+---
 
-```js
-const ref = db.edits.find().sort({timestamp:-1}).limit(1).next().timestamp;
-db.edits.aggregate([
-  {$match: {timestamp: {$gte: new Date(ref.getTime() - 3600000)}}},
-  {$group: {_id: "$lang", edits: {$sum: 1}}},
-  {$sort: {edits: -1}}
-]).toArray()
-```
+## 13. Limites connues
 
-Sortie : `en` 2910 · `fr` 411 · `ar` 139
-
-**3. Bots contre humains (dernière heure)**
-
-```js
-const ref = db.edits.find().sort({timestamp:-1}).limit(1).next().timestamp;
-db.edits.aggregate([
-  {$match: {timestamp: {$gte: new Date(ref.getTime() - 3600000)}}},
-  {$group: {_id: {$cond: ["$bot", "bot", "humain"]}, edits: {$sum: 1}}},
-  {$sort: {_id: 1}}
-]).toArray()
-```
-
-Sortie : `bot` 880 · `humain` 2592
-
-**4. Vues horaires de l'article du séisme (fr et en)**
-
-```js
-db.pageviews.find(
-  {$or: [
-    {lang: "fr", title: "Séisme de 2023 au Maroc"},
-    {lang: "en", title: "2023 Marrakesh-Safi earthquake"}
-  ]},
-  {_id: 0, lang: 1, title: 1, hour: 1, views: 1}
-).sort({hour: 1}).toArray()
-```
-
-Sortie réelle (heures chargées pour la démo : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC). Aucune vue avant 22:11 (l'article n'existait pas), puis le pic :
-
-```
-en 08/09 23:00 238
-fr 09/09 00:00 57
-en 09/09 00:00 1572
-fr 09/09 01:00 230
-en 09/09 01:00 873
-fr 09/09 02:00 221
-en 09/09 02:00 1005
-fr 09/09 03:00 188
-en 09/09 03:00 1534
-```
-
-**5. Recherche texte dans les modifications**
-
-```js
-db.edit_texts.find(
-  {$text: {$search: "football"}},
-  {_id: 0, lang: 1, title: 1, comment: 1, score: {$meta: "textScore"}}
-).sort({score: {$meta: "textScore"}}).limit(5).toArray()
-```
-
-Sortie (extrait) : `Huskies de Northern Illinois` (fr), `2026 LSU Tigers football team` (en), `Équipe de Tunisie de football` (fr). La recherche ignore la casse et les accents : `élection` et `election` donnent le même résultat (22 documents).
-
-Attention : `séisme` ne donne aucun résultat aujourd'hui, car `edit_texts` ne contient que les modifications du flux en direct (2026), pas les textes de 2023.
-
-**6. Dernières alertes**
-
-```js
-db.alerts.find(
-  {},
-  {_id: 0, lang: 1, title: 1, edits: 1, distinct_users: 1, z_score: 1, baseline_type: 1, created_at: 1}
-).sort({created_at: -1}).limit(5).toArray()
-```
-
-Sortie (extrait) : `Willy on Wheels` (en), 5 modifications, 3 utilisateurs, z = 4, `baseline_type: 'provisoire'`.
-
-Version non interactive, pour une commande unique :
-
-```bash
-docker compose exec -T mongo mongosh radar --quiet --eval 'printjson(db.alerts.countDocuments())'
-```
-
-## Détecteur d'anomalies
-
-**Idée** : un article a une activité « normale ». Un pic est une activité très supérieure à cette normale.
-
-- **Fenêtre** : 5 minutes (`WINDOW_MINUTES`). Le détecteur compte, pour chaque article, les modifications non-bot de la fenêtre et le nombre d'utilisateurs distincts.
-- **Référence habituelle (baseline)** : l'activité des 24 dernières heures (`BASELINE_HOURS`), découpée en tranches de 5 minutes, pour chaque article.
-- **Z-score** : `z = (modifications de la fenêtre − moyenne habituelle) / écart-type`. L'écart-type vaut au moins 1 pour éviter les divisions par presque zéro.
-- **Provisoire** : si l'historique disponible est inférieur à 6 heures (`MIN_HISTORY_HOURS`), la référence est la médiane et l'écart-type des tranches non vides, et l'alerte est marquée `provisoire`.
-- **Seuils** (dans `.env`) : une alerte est créée si `z > Z_THRESHOLD` (3), si au moins `MIN_USERS` (3) utilisateurs distincts ont modifié l'article, et s'il n'y a pas déjà une alerte pour cet article depuis `ALERT_COOLDOWN_MINUTES` (15).
-
-**Temps de l'événement, pas temps de l'horloge** : la fenêtre se termine à la dernière modification reçue (`ref_time = max(edits.timestamp)`), et non à l'heure du conteneur. L'horloge de la machine hôte peut être fausse : nous avons mesuré une avance d'environ 1 heure. Le 15/10/2026, la dernière modification reçue était environ 2 heures en retard sur l'heure de la machine (cause non confirmée : horloge ou reprise du flux après une reconnexion). Compter sur l'heure d'arrivée donnerait des fenêtres vides ou décalées. C'est le même principe que les **watermarks** de Spark Streaming.
-
-Ce détecteur est simple et tourne dans Python. Il sera remplacé par **Spark Streaming** en phase 3.
-
-## Démo en 5 minutes
-
-| # | Écran | Ce qu'on montre | Ce qu'on dit |
-|---|---|---|---|
-| 1 | **Radar en direct** (`/`) | Compteurs, « blips » et bandeau défilant des articles actifs | « Ces articles sont modifiés en ce moment. Le radar se met à jour sans rechargement. » |
-| 2 | **Alertes** (`/alertes`) | Liste des pics, avec z-score et nombre d'utilisateurs | « Un pic, c'est un z-score supérieur à 3, avec au moins 3 personnes différentes. » |
-| 3 | **Un article** (cliquer sur un article) | Frise de l'activité des 24 dernières heures, texte ajouté par les modifications | « On voit ce qui a été écrit, par qui, et quand. Ce texte vient de l'API `compare` de Wikipédia. » |
-| 4 | **Rejouer : séisme d'Al Haouz** (`/rejouer`) | Courbes de vues en arabe, français et anglais autour du 8 septembre 2023 | « Avec les vues horaires, on voit le pic de consultation après le séisme. Ce sont les vraies données de 2023. » |
-| 5 | **Explorateur de données** (`/explorateur`) | Les trois types de données : semi-structuré, non structuré, structuré | « Tout est dans MongoDB. Voici les trois types de données, et mongo-express pour les voir brutes. » |
-| 6 | **Recherche** (`/recherche`) | Recherche plein texte dans les modifications | « La recherche utilise l'index texte de MongoDB, avec un score de pertinence. » |
-| 7 | **Le projet** (`/projet`) | Les 3 V du Big Data, l'architecture, la feuille de route | « Volume, vélocité, variété : Wikipédia coche les trois. Voici la suite : Kafka, Spark, HDFS. » |
-
-## Captures d'écran
-
-Les captures sont dans `qa/screenshots/` : une version bureau (1440 × 900) et une version mobile (390 × 844) pour chaque page (`radar`, `alertes`, `article`, `rejouer`, `explorateur`, `recherche`, `projet`).
-
-Régénérer avec Google Chrome installé localement :
-
-```bash
-node --experimental-websocket qa/cdp_screenshot.mjs http://localhost:5173 qa/screenshots 1440 900 \
-  radar-desktop=/ alertes-desktop=/alertes rejouer-desktop=/rejouer \
-  explorateur-desktop=/explorateur recherche-desktop=/recherche projet-desktop=/projet
-```
-
-Le format mobile se règle par la largeur (inférieure à 768 px) :
-
-```bash
-node --experimental-websocket qa/cdp_screenshot.mjs http://localhost:5173 qa/screenshots 390 844 \
-  radar-mobile=/ alertes-mobile=/alertes rejouer-mobile=/rejouer \
-  explorateur-mobile=/explorateur recherche-mobile=/recherche projet-mobile=/projet
-```
-
-Avec l'image Playwright (si elle est disponible) : `docker compose --profile qa run --rm qa`.
-
-## Limites connues et feuille de route
-
-**Limites actuelles**
-
-- **Volume de démonstration** : `PAGEVIEWS_MIN_VIEWS=20` ; l'échelle réelle exige un disque de 50 Go (voir section 6).
-- **Réseau** : un chargement de vues interrompu (lenteur réseau) laisse les heures en `error`. Elles sont reprises en relançant le chargeur.
-- **Données du séisme** : pour la démo (connexion lente), 10 heures sont chargées : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC (904 116 lignes). Relancer la commande de chargement complète les 49 heures (les heures déjà faites sont sautées).
-- **Recherche** : elle ne porte que sur les modifications du flux en direct, pas sur les textes de 2023.
-- **Détecteur** : pendant les 6 premières heures, la référence est « provisoire » ; la référence complète demande 6 heures d'historique.
-- **Temps** : le flux peut prendre du retard sur l'horloge murale (voir section 10).
-- **Sécurité** : MongoDB sans authentification (accès local seulement). L'API et l'application écoutent sur toutes les interfaces : à restreindre hors démo.
-- **Pas de haute disponibilité** : un seul conteneur par service.
-- **Redémarrage automatique** : `restart: unless-stopped` relance un service qui plante, mais pas un conteneur arrêté à la main (`docker kill` / `docker stop` = arrêt volontaire pour Docker). Pour la démo, utiliser `docker compose restart <service>`.
+- **Baseline provisoire** : il faut **au moins 6 heures** de flux continu pour que le détecteur compare chaque article à **sa propre** activité. Laisser tourner le flux avant la démo.
+- **Connexion lente** : si le réseau est lent, le flux prend du retard (l'application l'affiche). Rien n'est perdu, il rattrape quand le réseau revient.
+- **Recherche** : elle porte sur les textes du flux en direct (2026), pas sur les textes de 2023.
+- **Redémarrage automatique** : `restart: unless-stopped` relance un service qui plante, mais pas un conteneur arrêté à la main (`docker kill` / `docker stop`). Utiliser `docker compose restart <service>`.
 - **Textes retirés** : quelques `removed_text` contiennent des restes de wikitexte (`[[ ]]`) quand la modification ne change que des liens.
+- **Sécurité** : MongoDB sans mot de passe mais accessible seulement depuis la machine (127.0.0.1). L'application et l'API écoutent sur toutes les interfaces (pratique pour montrer sur un téléphone du même réseau) : à restreindre hors démo.
+- **Un seul conteneur par service** (pas de haute disponibilité).
 
-**Phase 2 : Kafka.** Découpler l'ingestion du stockage : le streamer publie les événements dans un topic Kafka, et les consommateurs écrivent dans MongoDB et calculent les scores.
+---
 
-**Phase 3 : Spark Streaming et HDFS.**
-- HDFS pour stocker les données brutes (dumps de vues, flux archivé), à l'échelle réelle.
-- Spark Streaming pour les fenêtres de temps et les watermarks, à la place du détecteur actuel.
-- Spark batch pour les vues historiques complètes (48 heures).
+## 14. Suite du projet : Kafka, Spark, HDFS
 
-## Équipe et sources
-
-**Équipe** : à compléter (noms des membres du groupe).
-
-**Sources de données**
-
-| Source | Lien | Usage |
+| Phase | Contenu | État |
 |---|---|---|
-| Flux de modifications récentes | https://stream.wikimedia.org/v2/stream/recentchange | `edits-streamer` (EventStreams, SSE) |
-| API `action=compare` | https://fr.wikipedia.org/w/api.php?action=compare (et `ar`, `en`) | `diff-worker` : texte ajouté et retiré |
-| Vues horaires | https://dumps.wikimedia.org/other/pageviews/ | `pageviews-loader` |
+| **1. Ingestion + stockage + application** | Python → MongoDB → FastAPI → React, données réelles | ✅ **terminée** |
+| **2. Kafka** | Le streamer publie dans un *topic* Kafka ; plusieurs consommateurs (stockage MongoDB, détection) lisent le même flux. Découplage et tolérance aux pannes. | à venir |
+| **3. Spark Streaming** | Fenêtres glissantes, watermarks (temps de l'événement), z-score distribué : remplace `detector`. | à venir |
+| **3. HDFS + Spark batch** | Stockage des dumps complets (des centaines de millions de lignes) et calcul des vues à l'échelle réelle. | à venir |
 
-**Politique User-Agent de Wikimédia** : chaque requête envoie `WIKI_USER_AGENT` (depuis `.env`), qui doit contenir un nom de projet et un contact. Wikimédia répond HTTP 429 sans contact, et les réponses 429 sont respectées (attente `Retry-After`). Voir https://meta.wikimedia.org/wiki/User-Agent_policy.
+Le code est déjà prêt pour ça : chaque service est indépendant, la configuration est dans `.env`, et le contrat (`docs/CONTRACT.md`) fixe les formats.
+
+---
+
+## 15. Organisation du dépôt
+
+```
+.
+├── README.md              ← ce fichier (tout le projet expliqué)
+├── RUN.md                 ← lancer / arrêter / dépanner
+├── MONGO.md               ← accéder à MongoDB et montrer les données
+├── APP.md                 ← les pages de l'application
+├── PROGRESS.md            ← journal de l'avancement
+├── docker-compose.yml     ← tous les services
+├── .env.example           ← configuration (copier en .env)
+├── mongo/init/01-init.js  ← création des collections et des index
+├── ingestion/             ← services Python (streamer, diff-worker, pageviews, detector)
+│   ├── radar_ingest/
+│   └── config/watchlist.json   ← titres du séisme (toujours gardés)
+├── backend/               ← API FastAPI
+│   └── app/routers/       ← un fichier par groupe d'endpoints
+├── frontend/              ← application React
+│   └── src/pages/         ← une page = un fichier
+├── qa/                    ← tests (api_check.py) et captures d'écran (screenshots/)
+└── docs/CONTRACT.md       ← contrat technique (schémas, API)
+```
+
+---
+
+## 16. Démo en 5 minutes
+
+| # | Ouvrir | Dire |
+|---|---|---|
+| 1 | http://localhost:5173 — **Radar en direct** | « Chaque point est un article Wikipédia modifié dans les 5 dernières minutes, en arabe, français ou anglais. La taille = nombre de modifications. Les compteurs viennent de MongoDB et se mettent à jour toutes les 5 secondes. » |
+| 2 | **Alertes** | « Le détecteur calcule un z-score : combien de fois l'activité dépasse la normale de l'article. Au-delà de 3, avec au moins 3 contributeurs différents, c'est une alerte. » |
+| 3 | Cliquer un article | « Pour chaque article : la chronologie des modifications, le texte réellement ajouté (donnée non structurée) et ses vues. » |
+| 4 | **Rejouer : séisme d'Al Haouz** | « Voici des données réelles de septembre 2023 : 0 vue avant le séisme, plus de 1 500 vues par heure juste après. C'est le pic que notre radar doit détecter. » |
+| 5 | **Explorateur** + http://localhost:8081 | « Les 3 types de données sont dans MongoDB : semi-structuré, non structuré, structuré. Voici les documents bruts. » (voir [`MONGO.md`](MONGO.md)) |
+| 6 | **Recherche** | « Recherche plein texte dans le texte des modifications, grâce à un index texte MongoDB. » |
+| 7 | **Le projet** | « Les 3 V, l'architecture et la suite : Kafka, Spark, HDFS. » |
+
+Le détail de chaque page est dans [`APP.md`](APP.md).
+
+---
+
+## 17. Questions probables et réponses
+
+**Les données sont-elles vraies ?**
+Oui, 100 %. Elles viennent directement de Wikimedia (flux officiel, API officielle, fichiers officiels). Rien n'est inventé. On peut le vérifier : chaque modification a un lien vers la vraie page Wikipédia, et la page Explorateur montre les documents bruts de MongoDB.
+
+**Pourquoi Wikipédia ?**
+C'est l'une des sources les plus réactives au monde, ouverte, gratuite, multilingue, avec un flux temps réel officiel.
+
+**Pourquoi le z-score et pas un simple seuil ?**
+Un article très actif (ex. un club de football) a beaucoup de modifications tous les jours. Un seuil fixe le signalerait tout le temps. Le z-score compare chaque article à **sa propre** normale.
+
+**Pourquoi « au moins 3 contributeurs » ?**
+Une seule personne qui enregistre souvent son travail peut faire 10 modifications en 5 minutes. Un vrai événement attire **plusieurs** personnes.
+
+**Pourquoi ne pas garder toutes les vues ?**
+Disque de 30 Go : les 49 heures complètes font ~116 millions de documents (> 15 Go). Nous lisons tout mais gardons ≥ 20 vues/heure. Le passage à l'échelle réelle est prévu avec HDFS + Spark (section 11).
+
+**Que se passe-t-il si internet coupe ?**
+Le streamer garde son point de reprise (`Last-Event-ID`) et repart exactement où il était, sans perte ni doublon (upserts). Le chargeur de vues saute les heures déjà faites.
+
+**Et si on relance un script deux fois ?**
+Aucun doublon : toutes les écritures sont des *upserts* sur une clé unique.
+
+**Où sont Kafka et Spark ?**
+Prévus pour les phases suivantes (section 14). L'architecture sépare déjà l'ingestion du stockage pour les brancher facilement.
+
+---
+
+## 18. Sources et liens
+
+- Flux EventStreams : https://stream.wikimedia.org/v2/stream/recentchange
+- Documentation EventStreams : https://wikitech.wikimedia.org/wiki/Event_Platform/EventStreams
+- API MediaWiki `compare` : https://www.mediawiki.org/wiki/API:Compare
+- Dumps pageviews : https://dumps.wikimedia.org/other/pageviews/
+- Règle User-Agent de Wikimedia : https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy
+- Séisme d'Al Haouz : https://fr.wikipedia.org/wiki/Séisme_de_2023_au_Maroc
+
+**Équipe :** _à compléter (noms des membres)_ — FST Marrakech, module Big Data.

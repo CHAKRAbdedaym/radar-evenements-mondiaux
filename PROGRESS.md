@@ -15,7 +15,7 @@
 | 6 | backend | ✅ done | all §7 endpoints curl-verified on real data, stats ~6 ms, radar ~14 ms, IXSCAN only, event-time ref (skew 3605 s measured). Replay/pageviews re-check after full load. |
 | 7 | frontend + 2 polish rounds | ✅ done | 7 pages, tsc 0 errors, no overflow at 390 px, no console errors. Round 1: mobile radar, label collisions, event-time relative times, bdi for Arabic, consistent counts, slow-feed badge. Round 2: alerts grouped per article, clearer lag wording, replay partial data (EN peak 261 views at 2023-09-08 23:00 UTC, real). Commit 4c0ef9d. |
 | 8 | full QA from scratch | ✅ done | qa-verifier: 2,305 API checks OK, indexes/unique keys/no duplicate alerts verified, restarts recover (Last-Event-ID resume), no overflow at 390/1440, no console errors. `docker compose down` + `up -d --build` → all healthy in ~2 min, 7 pages + 12 endpoints 200 (<100 ms). Known: `docker kill` = manual stop (no auto-restart), documented. |
-| 9 | README / docs | ✅ done | README.md (French), real outputs, demo script, full-scale section (30 GB limit). |
+| 9 | README / docs | ✅ done | README.md (whole project explained, FR), RUN.md (run/stop/troubleshoot), MONGO.md (access + 11 verified queries + teacher demo), APP.md (7 pages explained). |
 | 10 | final report | ✅ delivered 2026-10-16 |
 
 ## Decisions
