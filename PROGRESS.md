@@ -34,6 +34,8 @@
 
 ## Blocked
 - Contact email for `WIKI_USER_AGENT` (asked the user).
+- Subagents not detected in the first session (folder created mid-session) → user must restart Claude Code and type "read PROGRESS.md and continue".
 
 ## Next
-- Get email → put in `.env` → verify subagents detected → step 1 (infra-docker).
+- GitHub: private repo git@github.com:CHAKRAbdedaym/radar-evenements-mondiaux.git (origin/main), push after each commit.
+- Get email → put in `.env` (replace EMAIL_HERE) → verify subagents detected → step 1 (infra-docker).
