@@ -1,0 +1,6 @@
+{
+  "_comment": "Titles always kept by the pageviews loader regardless of PAGEVIEWS_MIN_VIEWS (Al Haouz earthquake replay). Confirmed with MediaWiki search + langlinks + redirects and the Wikimedia pageviews REST API (daily views 2023-09-08..10).",
+  "en": ["2023 Al Haouz earthquake", "2023 Marrakesh-Safi earthquake", "2023 Marrakesh–Safi earthquake", "2023 Morocco earthquake", "2023 Moroccan earthquake", "2023 Chichaoua earthquake", "2023 Moroco earthquake"],
+  "fr": ["Séisme de 2023 au Maroc"],
+  "ar": ["زلزال الحوز 2023", "زلزال مراكش-آسفي 2023", "زلزال مراكش آسفي 2023", "زلزال المغرب 2023", "زلزال الحوز", "زلزال مراكش", "زلزال إغيل 2023"]
+}

@@ -1,7 +1,7 @@
 # CONTRACT — Radar d'événements mondiaux
 
 > Single source of truth for every subagent. Owned by the orchestrator. **Do not change it yourself**: report needed changes.
-> Version 1.0
+> Version 1.1
 
 ## 1. Repository layout
 
@@ -68,7 +68,7 @@ Pageviews command: `docker compose --profile batch run --rm pageviews-loader --s
 | `DIFF_RATE_PER_SEC` | `5` | diff-worker |
 | `DIFF_QUEUE_MAX` | `2000` | diff-worker |
 | `DIFF_LOOKBACK_MINUTES` | `30` | diff-worker (on start, only consider edits this recent) |
-| `PAGEVIEWS_MIN_VIEWS` | `5` | loader: keep a merged (lang,title,hour) row only if views ≥ this, **except watchlist titles which are always kept** |
+| `PAGEVIEWS_MIN_VIEWS` | `20` (medium demo dataset, ~100k rows/hour; 1 = full scale) | loader: keep a merged (lang,title,hour) row only if views ≥ this, **except watchlist titles which are always kept** |
 | `PAGEVIEWS_BULK_SIZE` | `5000` | loader |
 | `PAGEVIEWS_PARALLEL` | `2` | loader (max 2: Wikimedia limit) |
 | `DETECTOR_INTERVAL_SECONDS` | `60` | detector |
@@ -274,7 +274,15 @@ Default hour = latest hour loaded. Excludes main pages (`Main Page`, `Wikipédia
 ```
 
 ### `GET /api/replay/alhaouz`
-Series for the replay page. Titles are defined in `backend/app/replay.py` (confirmed with the MediaWiki API). Per language, views = sum over the article title **and its redirect titles listed in replay.py** (views of a redirect are counted under the redirect's name in the dumps). Hours with no row → 0 only if that hour is loaded (`ingestion_log` done), otherwise omitted.
+Series for the replay page. Titles are defined in `backend/app/replay.py` (confirmed with the MediaWiki API):
+
+| lang | display title (today) | title used on 2023-09-08..10 | titles counted (= `ingestion/config/watchlist.json[lang]`) |
+|---|---|---|---|
+| ar | زلزال الحوز 2023 | زلزال مراكش-آسفي 2023 | all ar watchlist titles |
+| fr | Séisme de 2023 au Maroc | Séisme de 2023 au Maroc | all fr watchlist titles |
+| en | 2023 Al Haouz earthquake | 2023 Marrakesh-Safi earthquake | all en watchlist titles |
+
+Each series also returns `"title_at_time"`. Per language, views = sum over the article title **and its redirect titles listed in replay.py** (views of a redirect are counted under the redirect's name in the dumps). Hours with no row → 0 only if that hour is loaded (`ingestion_log` done), otherwise omitted.
 ```json
 {"event": {"name": "Séisme d'Al Haouz", "time": "2023-09-08T22:11:00Z"},
  "start": "2023-09-08T12:00:00Z", "end": "2023-09-10T12:00:00Z",
