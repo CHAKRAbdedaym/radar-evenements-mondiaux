@@ -30,6 +30,8 @@ async def alhaouz():
         views = {r["_id"]: r["views"] for r in rows}
         items = [{"hour": iso(h), "views": views.get(h, 0)} for h in loaded]
         peak = max(items, key=lambda i: i["views"]) if items else None
+        if peak and peak["views"] <= 0:
+            peak = None  # no view loaded yet: no peak to show
         out.append({
             "lang": s["lang"],
             "title": s["title"],
