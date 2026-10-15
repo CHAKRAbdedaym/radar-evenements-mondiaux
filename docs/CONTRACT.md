@@ -1,7 +1,7 @@
 # CONTRACT — Radar d'événements mondiaux
 
 > Single source of truth for every subagent. Owned by the orchestrator. **Do not change it yourself**: report needed changes.
-> Version 1.1
+> Version 1.2
 
 ## 1. Repository layout
 
@@ -86,6 +86,9 @@ Pageviews command: `docker compose --profile batch run --rm pageviews-loader --s
 - All dates stored as BSON `Date` in UTC. API returns ISO-8601 strings with `Z` (e.g. `"2023-09-08T22:00:00Z"`).
 - Wikipedia URL: `https://{lang}.wikipedia.org/wiki/{title with _ , URL-encoded}`.
 - Article API path: `/api/articles/{lang}/{title}` — title URL-encoded (`encodeURIComponent`); titles may contain `/`, so the route uses `{title:path}`.
+
+## 4b. Time reference (v1.2)
+The host clock may be wrong (measured 1 h behind real UTC). Wikimedia event timestamps are correct, so the system uses **event time**: `ref_time = max(edits.timestamp)`. The detector window is `[ref_time − WINDOW_MINUTES, ref_time]`; every API "last N minutes" window on `timestamp` is relative to `ref_time`; alert activity compares `alerts.window_end` with `ref_time`. Processing-time fields (`ingested_at`, `created_at`, `computed_at`, `fetched_at`) use the container wall clock and are only compared with each other. `/api/stats` adds `ref_time`, `server_time`, `clock_skew_seconds`; `/api/edits/recent` adds top-level `ref_time`; `/api/radar.time` = `ref_time`. The UI computes relative times against `ref_time`.
 
 ## 5. MongoDB — database `radar`
 
