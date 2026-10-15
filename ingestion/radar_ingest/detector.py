@@ -107,8 +107,9 @@ class Detector:
     def run_once(self):
         # EVENT TIME: the window ends at the newest edit timestamp (Wikimedia clock), never at the
         # container wall clock (which may be skewed). Mirrors Spark event-time / watermark semantics.
-        # If the stream stalls, ref stays put: the cycle still runs and the alert cooldown prevents
-        # duplicates. Cooldown / created_at / computed_at are processing time (wall clock).
+        # If the stream stalls or replays a backlog, ref barely moves: the cooldown is therefore also
+        # measured in event time (window_end), so one spike yields one alert whatever the wall clock
+        # does. created_at / computed_at stay processing time (wall clock).
         wall = common.utcnow()
         ref = common.latest_event_time(self.db)
         if ref is None:
@@ -136,7 +137,7 @@ class Detector:
                 btype = "provisoire"
 
             recent = {(a["lang"], a["title"]) for a in self.db["alerts"].find(
-                {"$or": [{"created_at": {"$gte": wall - self.cooldown}}, {"window_end": we}]},
+                {"window_end": {"$gt": we - self.cooldown}},
                 {"lang": 1, "title": 1})}
 
             for (lang, title), s in active.items():
