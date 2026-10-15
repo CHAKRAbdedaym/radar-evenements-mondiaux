@@ -31,15 +31,27 @@ const ws = new WebSocket(await target());
 await new Promise((r) => (ws.onopen = r));
 let seq = 0;
 const pending = new Map();
+const logs = [];
 ws.onmessage = (m) => {
   const msg = JSON.parse(m.data);
   if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+  // Collect page errors and console warnings/errors (printed per page).
+  if (msg.method === "Runtime.exceptionThrown") {
+    const d = msg.params.exceptionDetails;
+    logs.push(`EXCEPTION: ${d.exception?.description || d.text}`.slice(0, 600));
+  } else if (msg.method === "Runtime.consoleAPICalled" && ["error", "warning", "assert"].includes(msg.params.type)) {
+    logs.push(`console.${msg.params.type}: ${msg.params.args.map((a) => a.value ?? a.description ?? "").join(" ")}`.slice(0, 600));
+  } else if (msg.method === "Log.entryAdded" && ["error", "warning"].includes(msg.params.entry.level)) {
+    logs.push(`log.${msg.params.entry.level}: ${msg.params.entry.text} ${msg.params.entry.url || ""}`.slice(0, 600));
+  }
 };
 const send = (method, params = {}) => new Promise((r) => {
   const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params }));
 });
 
 await send("Page.enable");
+await send("Runtime.enable");
+await send("Log.enable");
 await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile });
 if (mobile) await send("Emulation.setTouchEmulationEnabled", { enabled: true });
 for (const spec of pages) {
@@ -51,13 +63,21 @@ for (const spec of pages) {
     returnByValue: true,
   });
   const dims = JSON.parse(result.result.value);
+  const fullH = Math.min(dims.h, 4000);
+  // Grow the viewport to the full page height so everything below the fold is painted.
+  if (fullH > H) {
+    await send("Emulation.setDeviceMetricsOverride", { width: W, height: fullH, deviceScaleFactor: 1, mobile });
+    await sleep(800);
+  }
   const shot = await send("Page.captureScreenshot", {
     format: "png", captureBeyondViewport: true,
-    clip: { x: 0, y: 0, width: W, height: Math.min(dims.h, 4000), scale: 1 },
+    clip: { x: 0, y: 0, width: W, height: fullH, scale: 1 },
   });
+  if (fullH > H) await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile });
   const file = join(outDir, `${name}.png`);
   writeFileSync(file, Buffer.from(shot.result.data, "base64"));
   console.log(`${file} scrollWidth=${dims.w} (viewport ${W})${dims.w > W ? "  <-- HORIZONTAL OVERFLOW" : ""}`);
+  for (const l of logs.splice(0)) console.log(`   ${l}`);
 }
 ws.close();
 chrome.kill();

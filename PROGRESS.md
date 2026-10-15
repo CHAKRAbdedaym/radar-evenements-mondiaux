@@ -10,12 +10,12 @@
 | 1 | infra (compose, mongo, mongo-express, init script) | ✅ done | mongo healthy (waits for init), 6 collections + all contract indexes verified, mongo-express 401 without auth / 200 with, both bound to 127.0.0.1. Commit 4997ba5. |
 | 2 | edits-streamer | ✅ done | 1,587 real edits after ~15 min (ar 52/12 bot, fr 137/40, en 995/351), Last-Event-ID checkpoint + resume verified, 0 errors, 28 MiB. |
 | 3 | diff-worker | ✅ done | 1,155 edit_texts (real wikitext added/removed, ar/fr/en), 0 errors, ≤5 req/s. |
-| 4 | pageviews-loader | 🟡 in progress | 1 hour test 2023-09-08T22: 60.6 MB, 7,188,874 lines read, 99,730 rows (min 20), ~52-75 s, re-run skipped. Full 49 h range running in background (log in scratchpad pageviews-full.log). Earthquake titles absent from the 22:00 dump (article created after the quake). |
+| 4 | pageviews-loader | ⚠️ partial (network) | 1 hour test 2023-09-08T22: 60.6 MB, 7,188,874 lines read, 99,730 rows (min 20), ~52-75 s, re-run skipped. Full 49 h range running in background (log in scratchpad pageviews-full.log). Earthquake titles absent from the 22:00 dump (article created after the quake). |
 | 5 | detector | ✅ done | event-time window, ~380 articles scored/cycle, 0 alerts yet: history 0.14 h → provisoire baseline (median 1) → needs ≥5 edits by ≥3 users in 5 min. Alert path proven on a throwaway db. Article baseline needs ≥6 h of stream. |
 | 6 | backend | ✅ done | all §7 endpoints curl-verified on real data, stats ~6 ms, radar ~14 ms, IXSCAN only, event-time ref (skew 3605 s measured). Replay/pageviews re-check after full load. |
-| 7 | frontend + 2 polish rounds | 🟡 in progress | |
+| 7 | frontend + 2 polish rounds | 🟡 polish round 1 | all 7 pages built (tsc 0 errors), committed. Screenshots by orchestrator (headless Chrome desktop + qa/cdp_screenshot.mjs for true 390px; Playwright image pull impossible on slow network). Round 1 fixes sent: radar blank on mobile, ring/blip label collisions, alert relative time from window_end, replay labels + bdi for Arabic, body bg. | |
 | 8 | full QA from scratch | ⏳ todo | |
-| 9 | README / docs | ⏳ todo | |
+| 9 | README / docs | 🟡 docs-writer running | |
 | 10 | final report | ⏳ todo | |
 
 ## Decisions
@@ -35,7 +35,8 @@
 - Full lists in `ingestion/config/watchlist.json` (contract §7 replay).
 
 ## Blocked
-- nothing
+- **Internet connection very slow / down** (2026-10-15 ~19:00 UTC: 7–15 KB/s, then DNS failure). Pageviews: 3/49 hours done (12h, 13h, 22h on 2023-09-08), loader stopped on purpose (user: don't loop); 9 interrupted hours marked error, retried on next run. Playwright image not pulled. Last commits not pushed yet (`git push` when network is back).
+- To resume pageviews: `docker compose --profile batch run --rm pageviews-loader --start 2023-09-08T12 --end 2023-09-10T12` (earthquake spike hours: 2023-09-08T23 → 2023-09-09T12 matter most).
 
 ## Next
-- Running in parallel (background agents): infra-docker (step 1), data-ingestion (steps 2-5 code + 1-hour pageviews test), backend-api (step 6), frontend-ui (step 7). Then: review each, full pageviews range, qa-verifier screenshots, polish rounds.
+- Review frontend polish round 1, then round 2; README review; when network is back: push, pageviews, step 8 full QA (down/up from scratch), final report.
