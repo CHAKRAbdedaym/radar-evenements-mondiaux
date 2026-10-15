@@ -30,6 +30,8 @@ Le système doit être lancé (`docker compose up -d`, voir [`RUN.md`](RUN.md)).
 | Authentification MongoDB | aucune (accès local uniquement) |
 | mongo-express | http://localhost:8081 — utilisateur `ME_USER`, mot de passe `ME_PASSWORD` (dans le fichier `.env`) |
 
+> ⚠️ **Ne pas ouvrir `http://127.0.0.1:27017` dans le navigateur.** Le port 27017 n'est pas un site web : c'est le port du protocole MongoDB (pour mongosh, Compass, Python…). Le navigateur affiche alors : *« It looks like you are trying to access MongoDB over HTTP on the native driver port. »* C'est **normal**. Pour voir les données dans un navigateur, ouvrir **http://localhost:8081** (mongo-express) ou **http://localhost:5173/explorateur** (notre application).
+
 Afficher le mot de passe de mongo-express :
 
 ```bash
