@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Edit, type Lang, type RadarItem } from "../api";
-import { usePolling, useNow } from "../hooks/usePolling";
-import { fmtBytes, fmtDec1, fmtInt, fmtRelative } from "../lib/format";
+import { api, type Edit, type Lang, type RadarItem, type Stats } from "../api";
+import { usePolling, useNow, type PollState } from "../hooks/usePolling";
+import { fmtBytes, fmtDec1, fmtInt, fmtRelative, fmtTimeUtc } from "../lib/format";
 import { LANG_CODE, LANGS } from "../lib/lang";
 import RadarScope from "../components/Radar";
 import { LangLinesChart } from "../components/charts";
@@ -26,8 +26,7 @@ import {
 
 const LIVE_MS = 5000;
 
-function Counters() {
-  const stats = usePolling((s) => api.stats(s), LIVE_MS);
+function Counters({ stats }: { stats: PollState<Stats> }) {
   const d = stats.data;
   if (!d) {
     return (
@@ -39,11 +38,15 @@ function Counters() {
   const total = d.collections.edits?.count ?? 0;
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-      <StatTile label="Modifs / min" value={<AnimatedNumber value={d.edits_last_minute} />} hint={`${fmtInt(d.edits_last_hour)} sur la dernière heure`} />
+      <StatTile
+        label="Modifs / min"
+        value={<AnimatedNumber value={d.edits_last_minute} />}
+        hint={`${d.ref_time ? `à ${fmtTimeUtc(d.ref_time)} · ` : ""}${fmtInt(d.edits_last_hour)} sur la dernière heure`}
+      />
       <StatTile label="Modifs stockées" value={<AnimatedNumber value={total} />} hint="dans MongoDB (edits)" />
       <StatTile label="Articles actifs" value={<AnimatedNumber value={d.active_articles} />} hint="modifiés ces 5 min (hors bots)" />
       <StatTile
-        label="Alertes actives"
+        label="Alertes (1 h)"
         accent={d.active_alerts > 0 ? "alert" : "none"}
         value={
           <Link to="/alertes" className="hover:underline">
@@ -51,7 +54,7 @@ function Counters() {
             <AnimatedNumber value={d.active_alerts} />
           </Link>
         }
-        hint="créées dans la dernière heure"
+        hint="dernière heure de données"
       />
       <StatTile
         label="Taille MongoDB"
@@ -72,7 +75,7 @@ function TickerRow({ e, now, fresh }: { e: Edit; now: number; fresh: boolean }) 
         <p className="truncate text-[11.5px] text-ink-3">
           {e.type === "new" && <span className="mr-1 rounded bg-cyan/15 px-1 font-mono text-[10px] text-cyan">NOUVEL ARTICLE</span>}
           {e.bot && <span className="mr-1 rounded bg-white/10 px-1 font-mono text-[10px] text-ink-2">BOT</span>}
-          par <span className="text-ink-2" dir="auto">{e.user || "anonyme"}</span>
+          par <bdi className="text-ink-2">{e.user || "anonyme"}</bdi>
         </p>
       </div>
       <div className="text-right">
@@ -105,13 +108,14 @@ function Ticker({ lang, includeBots }: { lang: Lang | null; includeBots: boolean
   }, [recent.data]);
   return (
     <Panel
+      className="h-full"
       title="Dernières modifications"
-      right={<LiveIndicator lastUpdated={recent.lastUpdated} error={recent.error} />}
+      right={<LiveIndicator lastUpdated={recent.lastUpdated} error={recent.error} feed={false} />}
       bodyClass="px-3 pb-2 pt-1 sm:px-4"
     >
       <DataView state={recent} isEmpty={(d) => d.items.length === 0} empty={<Empty>Aucune modification reçue pour ce filtre pour l'instant.</Empty>} loadingRows={6}>
         {() => (
-          <ul className="max-h-[560px] overflow-y-auto pr-1" aria-live="off">
+          <ul className="max-h-[560px] overflow-y-auto pr-1 xl:max-h-[650px]" aria-live="off">
             {items.map((e) => (
               <TickerRow key={e.id} e={e} now={now} fresh={fresh.has(e.id)} />
             ))}
@@ -123,7 +127,7 @@ function Ticker({ lang, includeBots }: { lang: Lang | null; includeBots: boolean
 }
 
 function TopList({ items, now }: { items: RadarItem[]; now: number }) {
-  const top = [...items].sort((a, b) => b.edits - a.edits || b.distinct_users - a.distinct_users).slice(0, 10);
+  const top = [...items].sort((a, b) => b.edits - a.edits || b.distinct_users - a.distinct_users).slice(0, 8);
   return (
     <ol className="divide-y divide-line/70">
       {top.map((it, i) => (
@@ -153,10 +157,22 @@ export default function RadarPage() {
   const [hideBots, setHideBots] = useState(true);
   const includeBots = !hideBots;
   const radar = usePolling((s) => api.radar({ lang, includeBots }, s), LIVE_MS, [lang, includeBots]);
+  const stats = usePolling((s) => api.stats(s), LIVE_MS);
   const timeline = usePolling((s) => api.timeline({ lang, includeBots, minutes: 60 }, s), LIVE_MS * 2, [lang, includeBots]);
   const now = useNow(5000);
 
   const radarItems = radar.data?.items ?? [];
+  // Same metric / window / wording as the "Articles actifs" counter (non-bot, last N min).
+  const RADAR_CAP = 150;
+  const unfiltered = lang === null && hideBots;
+  const filterNote = lang ? ` (${LANG_CODE[lang]}${hideBots ? "" : ", bots inclus"})` : hideBots ? "" : " (bots inclus)";
+  const radarCaption = !radar.data
+    ? ""
+    : radarItems.length >= RADAR_CAP
+      ? unfiltered && stats.data
+        ? `${fmtInt(radarItems.length)} plus actifs sur ${fmtInt(Math.max(stats.data.active_articles, radarItems.length))} articles actifs · ${radar.data.window_minutes} dernières min`
+        : `${fmtInt(radarItems.length)} plus actifs${filterNote} · ${radar.data.window_minutes} dernières min`
+      : `${fmtInt(radarItems.length)} article${radarItems.length > 1 ? "s" : ""} actif${radarItems.length > 1 ? "s" : ""}${filterNote} · ${radar.data.window_minutes} dernières min`;
   const alerting = radarItems.filter((i) => i.alert).length;
   let overlay = null;
   if (!radar.data) {
@@ -188,7 +204,7 @@ export default function RadarPage() {
         <LiveIndicator lastUpdated={radar.lastUpdated} error={radar.error} />
       </header>
 
-      <Counters />
+      <Counters stats={stats} />
 
       {/* Filters */}
       <div className="panel flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3">
@@ -206,15 +222,13 @@ export default function RadarPage() {
           title={
             <>
               Radar en direct
-              <span className="ml-2 font-mono text-xs font-normal text-ink-3">
-                {radar.data ? `${fmtInt(radarItems.length)} articles · ${radar.data.window_minutes} dernières min` : ""}
-              </span>
+              <span className="ml-2 font-mono text-xs font-normal text-ink-3">{radarCaption}</span>
             </>
           }
           right={
             alerting > 0 ? (
               <Link to="/alertes" className="rounded-md border border-alert/50 bg-alert-soft px-2 py-0.5 font-mono text-xs font-bold text-alert">
-                🚨 {alerting} en alerte
+                🚨 {alerting} en alerte (15 dernières min)
               </Link>
             ) : null
           }
@@ -249,7 +263,7 @@ export default function RadarPage() {
             {() => (
               <>
                 <LangLegend className="mb-2" />
-                <LangLinesChart data={tlData} langs={lang ? [lang] : LANGS} height={230} unit="modifications" />
+                <LangLinesChart data={tlData} langs={lang ? [lang] : LANGS} height={330} unit="modifications" />
               </>
             )}
           </DataView>

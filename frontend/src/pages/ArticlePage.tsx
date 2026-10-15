@@ -39,7 +39,7 @@ function LongText({ text, lang, kind }: { text: string; lang: Lang; kind: "added
       }`}
     >
       <p className="mb-1 font-mono text-[10.5px] uppercase tracking-wider opacity-80">{added ? "+ texte ajouté" : "− texte retiré"}</p>
-      <p dir={dirOf(lang)} className={`whitespace-pre-wrap break-words ${added ? "" : "line-through decoration-minus/60"} ${lang === "ar" ? "font-arabic" : ""}`}>
+      <p dir={dirOf(lang)} className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${added ? "" : "line-through decoration-minus/60"} ${lang === "ar" ? "font-arabic" : ""}`}>
         {shown}
       </p>
       {long && (
@@ -61,8 +61,8 @@ function TextItem({ t, lang }: { t: EditText; lang: Lang }) {
           révision {t.rev_new} ↗
         </a>
         {t.comment && (
-          <span className="min-w-0 truncate italic" dir="auto">
-            « {t.comment} »
+          <span className="min-w-0 truncate italic">
+            « <bdi>{t.comment}</bdi> »
           </span>
         )}
       </div>
@@ -274,7 +274,7 @@ export default function ArticlePage() {
                 <li key={e.id} className="grid grid-cols-[1fr_auto] gap-2 py-2 text-sm">
                   <div className="min-w-0">
                     <p className="truncate text-ink-2">
-                      <span dir="auto">{e.user || "anonyme"}</span>
+                      <bdi>{e.user || "anonyme"}</bdi>
                       {e.bot && <span className="ml-1 rounded bg-white/10 px-1 font-mono text-[10px]">BOT</span>}
                     </p>
                     {e.comment && (

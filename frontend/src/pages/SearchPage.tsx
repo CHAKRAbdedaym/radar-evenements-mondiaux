@@ -99,17 +99,17 @@ export default function SearchPage() {
         ) : (
           <ul className="divide-y divide-line/70">
             {res.data.items.map((r) => (
-              <li key={r.id} className="fade-up py-4">
+              <li key={r.id} className="fade-up min-w-0 py-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <LangBadge lang={r.lang} />
                   <ArticleLink lang={r.lang} title={r.title} className="font-display text-[15px] font-semibold text-white" />
                 </div>
-                <p dir={dirOf(r.lang)} className={`mt-2 text-sm leading-relaxed text-ink-2 ${r.lang === "ar" ? "font-arabic" : ""}`}>
+                <p dir={dirOf(r.lang)} className={`mt-2 text-sm leading-relaxed text-ink-2 [overflow-wrap:anywhere] ${r.lang === "ar" ? "font-arabic" : ""}`}>
                   {highlight(r.snippet, q)}
                 </p>
                 {r.comment && (
-                  <p dir="auto" className="mt-1 text-xs italic text-ink-3">
-                    Commentaire : « {highlight(r.comment, q)} »
+                  <p className="mt-1 text-xs italic text-ink-3 [overflow-wrap:anywhere]">
+                    Commentaire : « <bdi>{highlight(r.comment, q)}</bdi> »
                   </p>
                 )}
                 <p className="mt-1.5 font-mono text-[11px] text-ink-3">

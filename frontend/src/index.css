@@ -13,18 +13,28 @@
 
 html,
 body {
-  background: var(--night);
+  background-color: #0a1020;
   color: #e6edf7;
+  min-height: 100%;
 }
 
 body {
   font-family: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+#root {
   min-height: 100vh;
+  background-color: #0a1020;
+}
+
+/* Soft glow at the top of the app shell (scrolls with the page, no fixed attachment). */
+.app-shell {
+  background-color: #0a1020;
   background-image:
-    radial-gradient(1200px 600px at 70% -10%, rgba(63, 208, 201, 0.07), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(57, 135, 229, 0.06), transparent 60%);
-  background-attachment: fixed;
+    radial-gradient(1100px 520px at 75% -120px, rgba(63, 208, 201, 0.07), transparent 70%),
+    radial-gradient(800px 420px at -10% 0%, rgba(57, 135, 229, 0.05), transparent 70%);
+  background-repeat: no-repeat;
 }
 
 [dir="rtl"],

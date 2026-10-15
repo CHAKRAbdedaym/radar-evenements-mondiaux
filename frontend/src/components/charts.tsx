@@ -39,16 +39,39 @@ export function TooltipCard({ title, rows, footer }: { title: ReactNode; rows: T
   );
 }
 
-/** Direct label rendered only at the last point of a line ("FR 120"). */
-export function endLabel(lang: Lang, lastIndex: number) {
+/**
+ * Vertical pixel offsets for line-end labels so labels of lines ending at close values do not stack.
+ * `last` = last value per language (null = no label). Closeness is judged relative to `max`
+ * (or in log space when `log`). Returns dy per language (0 when isolated).
+ */
+export function endLabelOffsets(last: Partial<Record<Lang, number | null>>, max: number, log = false): Partial<Record<Lang, number>> {
+  const pos = (v: number) => (log ? Math.log10(Math.max(v, 1)) / Math.max(Math.log10(Math.max(max, 10)), 1) : v / Math.max(max, 1));
+  const items = (Object.entries(last) as [Lang, number | null][])
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([l, v]) => ({ l, p: pos(v as number) }))
+    .sort((a, b) => b.p - a.p);
+  const out: Partial<Record<Lang, number>> = {};
+  let i = 0;
+  while (i < items.length) {
+    let j = i;
+    while (j + 1 < items.length && items[j].p - items[j + 1].p < 0.07) j++;
+    const n = j - i + 1;
+    for (let k = i; k <= j; k++) out[items[k].l] = (k - i - (n - 1) / 2) * 13;
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Direct label rendered only at the last point of a line ("FR"), shifted by `dy` to avoid stacking. */
+export function endLabel(lang: Lang, lastIndex: number, dy = 0) {
   // eslint-disable-next-line react/display-name
   return (props: { x?: number | string; y?: number | string; index?: number; value?: number | string }) => {
-    if (props.index !== lastIndex || props.value === null || props.value === undefined) return <g />;
+    if (lastIndex < 0 || props.index !== lastIndex || props.value === null || props.value === undefined) return <g />;
     return (
       <text
         x={Number(props.x) + 6}
         y={Number(props.y)}
-        dy={4}
+        dy={4 + dy}
         fill="#E6EDF7"
         fontSize={11}
         fontWeight={700}
@@ -75,6 +98,11 @@ export function LangLinesChart({ data, langs = LANGS, height = 220, unit = "modi
   unit?: string;
 }) {
   const last = data.length - 1;
+  const positive = (l: Lang) => data.some((d) => (d[l] ?? 0) > 0);
+  const max = Math.max(1, ...data.flatMap((d) => langs.map((l) => d[l] ?? 0)));
+  const lastVals: Partial<Record<Lang, number | null>> = {};
+  for (const l of langs) lastVals[l] = positive(l) && last >= 0 ? data[last][l] ?? null : null;
+  const dys = endLabelOffsets(lastVals, max);
   return (
     <div style={{ height }} className="w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -118,7 +146,7 @@ export function LangLinesChart({ data, langs = LANGS, height = 220, unit = "modi
               dot={false}
               activeDot={{ r: 4, stroke: "#0A1020", strokeWidth: 2 }}
               isAnimationActive={false}
-              label={endLabel(l, last)}
+              label={endLabel(l, positive(l) ? last : -1, dys[l] ?? 0)}
             />
           ))}
         </LineChart>

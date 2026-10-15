@@ -2,9 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { BaselineType, Lang } from "../api";
 import { ApiError } from "../api";
-import { fmtInt, fmtRelative, fmtSigned, fmtDateTimeUtc } from "../lib/format";
+import { fmtInt, fmtRelative, fmtSigned, fmtDateTimeUtc, fmtTimeUtc } from "../lib/format";
+import { SLOW_FEED_PER_MIN } from "../lib/clock";
 import { LANG_CODE, LANG_COLOR, LANG_NAME, LANGS, articlePath, dirOf } from "../lib/lang";
-import { useNow, useReducedMotion } from "../hooks/usePolling";
+import { useFeedStatus, useNow, useReducedMotion } from "../hooks/usePolling";
 
 export function Panel({ title, right, children, className = "", bodyClass = "p-4 sm:p-5" }: {
   title?: ReactNode;
@@ -54,15 +55,23 @@ export function LangBadge({ lang, size = "sm" }: { lang: Lang; size?: "sm" | "md
   );
 }
 
-/** Article title linking to the internal article page, RTL for Arabic. */
+/** Text written in `lang`, bidi-isolated (<bdi>) so Arabic keeps its order inside French sentences. */
+export function LangText({ lang, children, className = "" }: { lang: Lang; children: ReactNode; className?: string }) {
+  return (
+    <bdi dir={dirOf(lang)} lang={lang} className={`${lang === "ar" ? "font-arabic" : ""} ${className}`}>
+      {children}
+    </bdi>
+  );
+}
+
+/** Article title linking to the internal article page, bidi-isolated for Arabic. */
 export function ArticleLink({ lang, title, className = "" }: { lang: Lang; title: string; className?: string }) {
   return (
     <Link
       to={articlePath(lang, title)}
-      dir={dirOf(lang)}
-      className={`hover:text-cyan hover:underline decoration-cyan/40 underline-offset-2 ${lang === "ar" ? "font-arabic" : ""} ${className}`}
+      className={`hover:text-cyan hover:underline decoration-cyan/40 underline-offset-2 ${className}`}
     >
-      {title}
+      <LangText lang={lang}>{title}</LangText>
     </Link>
   );
 }
@@ -109,13 +118,14 @@ export function BaselineBadge({ type }: { type: BaselineType | null | undefined 
 }
 
 /** Hover / focus tooltip with plain text. */
-export function InfoTip({ tip, children }: { tip: string; children: ReactNode }) {
+export function InfoTip({ tip, children, align = "center", below = false }: { tip: string; children: ReactNode; align?: "center" | "right" | "left"; below?: boolean }) {
+  const pos = align === "right" ? "right-0" : align === "left" ? "left-0" : "left-1/2 -translate-x-1/2";
   return (
     <span className="group relative inline-flex" tabIndex={0} aria-label={tip}>
       {children}
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-lg border border-line2 bg-[#0d1528] p-2.5 text-xs leading-snug text-ink-2 opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+        className={`pointer-events-none invisible absolute ${below ? "top-full mt-2" : "bottom-full mb-2"} ${pos} z-30 w-64 max-w-[80vw] rounded-lg border border-line2 bg-[#0d1528] p-2.5 text-xs leading-snug text-ink-2 opacity-0 shadow-xl transition-opacity duration-150 group-hover:visible group-hover:opacity-100 group-focus:visible group-focus:opacity-100`}
       >
         {tip}
       </span>
@@ -297,15 +307,43 @@ export function StatTile({ label, value, hint, accent = "cyan", children }: {
   );
 }
 
-export function LiveIndicator({ lastUpdated, error }: { lastUpdated: number | null; error: Error | null }) {
+export function LiveIndicator({ lastUpdated, error, feed = true }: { lastUpdated: number | null; error: Error | null; feed?: boolean }) {
   useNow(1000); // re-render every second
   const now = Date.now(); // lastUpdated is a browser timestamp: compare with the browser clock
   const ok = !error && lastUpdated !== null;
   return (
-    <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-3" aria-live="off">
-      <span className={`h-2 w-2 rounded-full ${ok ? "live-dot bg-cyan" : "bg-alert"}`} aria-hidden />
-      {ok ? <>EN DIRECT · maj {fmtRelative(lastUpdated!, now)}</> : error ? "connexion perdue" : "connexion…"}
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[11px] text-ink-3" aria-live="off">
+      <span className="inline-flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${ok ? "live-dot bg-cyan" : "bg-alert"}`} aria-hidden />
+        {ok ? <>EN DIRECT · maj {fmtRelative(lastUpdated!, now)}</> : error ? "connexion perdue" : "connexion…"}
+      </span>
+      {feed && <FeedBadge />}
     </span>
+  );
+}
+
+/** Honest status of the live feed: reference time of the data + "Flux ralenti" when ingestion is slow. */
+export function FeedBadge() {
+  const f = useFeedStatus();
+  if (!f.refTime) return null;
+  const slow = f.ratePerMin !== null && f.ratePerMin < SLOW_FEED_PER_MIN;
+  return (
+    <>
+      <span title="Heure de la modification la plus récente reçue (heure de l'événement Wikipédia)">
+        Données jusqu'à <span className="text-ink-2">{fmtTimeUtc(f.refTime)}</span>
+      </span>
+      {slow && (
+        <InfoTip
+          align="right"
+          below
+          tip={`Le serveur reçoit actuellement ${fmtInt(f.ratePerMin ?? 0)} modifs/min ; les chiffres affichés correspondent à l'activité Wikipédia jusqu'à ${fmtTimeUtc(f.refTime)}.`}
+        >
+          <span className="cursor-help rounded-md border border-alert/50 bg-alert-soft px-1.5 py-0.5 font-bold text-alert">
+            ⚠ Connexion lente : flux en retard
+          </span>
+        </InfoTip>
+      )}
+    </>
   );
 }
 

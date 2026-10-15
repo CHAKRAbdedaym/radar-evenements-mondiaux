@@ -5,7 +5,9 @@ import { fmtDateTimeUtc, fmtDec1, fmtDec2, fmtInt, fmtTime } from "../lib/format
 import { LANG_NAME } from "../lib/lang";
 import { ArticleLink, BaselineBadge, DataView, DeltaBytes, Empty, LangBadge, LangFilter, LiveIndicator, PageHeader, TimeAgo } from "../components/ui";
 
-function AlertCard({ a }: { a: Alert }) {
+/** One card per article: the strongest alert in front, every detected window listed below. */
+function AlertCard({ group }: { group: Alert[] }) {
+  const a = group[0];
   return (
     <article className="panel fade-up relative overflow-hidden p-4 sm:p-5">
       <span className="absolute inset-y-0 left-0 w-1 bg-alert" aria-hidden />
@@ -47,9 +49,30 @@ function AlertCard({ a }: { a: Alert }) {
           </dd>
         </div>
       </dl>
-      <p className="mt-4 border-t border-line pt-3 font-mono text-xs text-ink-3">
-        Fenêtre {fmtTime(a.window_start)} → {fmtTime(a.window_end)} UTC · {fmtDateTimeUtc(a.created_at).slice(0, 10)} · créée <TimeAgo iso={a.created_at} />
-      </p>
+      {group.length === 1 ? (
+        <p className="mt-4 border-t border-line pt-3 font-mono text-xs text-ink-3">
+          Fenêtre {fmtTime(a.window_start)} → {fmtTime(a.window_end)} UTC · {fmtDateTimeUtc(a.window_end).slice(0, 10)} · détectée{" "}
+          <TimeAgo iso={a.window_end} />
+        </p>
+      ) : (
+        <div className="mt-4 border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink-2">
+            {fmtInt(group.length)} alertes pour cet article (pics distincts) :
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {[...group]
+              .sort((x, y) => y.window_end.localeCompare(x.window_end))
+              .map((g) => (
+                <li key={g.id} className="flex flex-wrap items-baseline justify-between gap-x-3 font-mono text-xs text-ink-3">
+                  <span>
+                    {fmtTime(g.window_start)} → {fmtTime(g.window_end)} UTC · détectée <TimeAgo iso={g.window_end} />
+                  </span>
+                  <span className={`num font-bold ${g.id === a.id ? "text-alert" : "text-ink-2"}`}>z {fmtDec1(g.z_score)}</span>
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
     </article>
   );
 }
@@ -57,7 +80,18 @@ function AlertCard({ a }: { a: Alert }) {
 export default function AlertsPage() {
   const [lang, setLang] = useState<Lang | null>(null);
   const alerts = usePolling((s) => api.alerts({ lang, limit: 100 }, s), 15000, [lang]);
-  const sorted = useMemo(() => [...(alerts.data?.items ?? [])].sort((a, b) => b.z_score - a.z_score), [alerts.data]);
+  // Group by article (no dedup: every alert returned by the API is listed), strongest first.
+  const groups = useMemo(() => {
+    const m = new Map<string, Alert[]>();
+    for (const a of alerts.data?.items ?? []) {
+      const k = `${a.lang}:${a.title}`;
+      m.set(k, [...(m.get(k) ?? []), a]);
+    }
+    return [...m.values()]
+      .map((g) => [...g].sort((x, y) => y.z_score - x.z_score))
+      .sort((x, y) => y[0].z_score - x[0].z_score);
+  }, [alerts.data]);
+  const total = alerts.data?.items.length ?? 0;
 
   return (
     <div>
@@ -95,11 +129,12 @@ export default function AlertsPage() {
         {() => (
           <>
             <p className="mb-3 text-sm text-ink-3">
-              {fmtInt(sorted.length)} alerte{sorted.length > 1 ? "s" : ""} · triées par z-score décroissant
+              {fmtInt(total)} alerte{total > 1 ? "s" : ""} · {fmtInt(groups.length)} article{groups.length > 1 ? "s" : ""} · triés par
+              z-score maximal
             </p>
-            <div className="grid gap-4 lg:grid-cols-2">
-              {sorted.map((a) => (
-                <AlertCard key={a.id} a={a} />
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              {groups.map((g) => (
+                <AlertCard key={`${g[0].lang}:${g[0].title}`} group={g} />
               ))}
             </div>
           </>

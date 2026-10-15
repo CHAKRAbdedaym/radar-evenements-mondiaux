@@ -3,9 +3,9 @@ import { CartesianGrid, Line, LineChart, ReferenceDot, ReferenceLine, Responsive
 import { api, type Lang, type Replay } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { fmtInt, fmtShortDateTime } from "../lib/format";
-import { LANG_CODE, LANG_COLOR, LANG_NAME, LANGS, dirOf } from "../lib/lang";
-import { AXIS, GRID, TooltipCard, endLabel } from "../components/charts";
-import { ArticleLink, Empty, ErrorState, LangBadge, LangLegend, Loading, PageHeader, Panel, StaleBanner, Toggle } from "../components/ui";
+import { LANG_CODE, LANG_COLOR, LANG_NAME, LANGS } from "../lib/lang";
+import { AXIS, GRID, TooltipCard, endLabel, endLabelOffsets } from "../components/charts";
+import { ArticleLink, Empty, ErrorState, LangBadge, LangLegend, LangText, Loading, PageHeader, Panel, StaleBanner, Toggle } from "../components/ui";
 
 const HOUR = 3600 * 1000;
 
@@ -29,19 +29,47 @@ function buildRows(r: Replay, log: boolean): Row[] {
   return rows;
 }
 
-function ReplayChart({ r, log }: { r: Replay; log: boolean }) {
-  const rows = useMemo(() => buildRows(r, log), [r, log]);
-  const start = new Date(r.start).getTime();
-  const end = new Date(r.end).getTime();
-  const ticks: number[] = [];
-  for (let t = start; t <= end; t += 6 * HOUR) ticks.push(t);
+/** Loaded hours (any series has a row for them, 0 included). */
+function loadedHours(r: Replay): number[] {
+  const set = new Set<number>();
+  for (const s of r.series) for (const i of s.items) set.add(new Date(i.hour).getTime());
+  return [...set].sort((a, b) => a - b);
+}
+
+function ReplayChart({ r, log, full }: { r: Replay; log: boolean; full: boolean }) {
   const quakeHour = Math.floor(new Date(r.event.time).getTime() / HOUR) * HOUR;
+  const loaded = loadedHours(r);
+  // Default: only the loaded range (always including the earthquake hour); "full" = the 49 h with gaps.
+  let start = new Date(r.start).getTime();
+  let end = new Date(r.end).getTime();
+  if (!full && loaded.length) {
+    start = Math.min(loaded[0], quakeHour);
+    end = Math.max(loaded[loaded.length - 1], quakeHour + HOUR);
+    if (end - start < 2 * HOUR) {
+      start -= HOUR;
+      end += HOUR;
+    }
+  }
+  const rows = useMemo(() => buildRows(r, log).filter((row) => row.ts >= start && row.ts <= end), [r, log, start, end]);
+  const spanH = (end - start) / HOUR;
+  const step = spanH <= 8 ? 1 : spanH <= 16 ? 2 : spanH <= 30 ? 3 : 6;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(start / (step * HOUR)) * step * HOUR; t <= end; t += step * HOUR) ticks.push(t);
   const quakeLabel = `Séisme : ${new Date(r.event.time).toISOString().slice(11, 16)} UTC`;
   const langs = r.series.map((s) => s.lang);
+  // End label only for series with at least one positive value; offsets avoid stacked labels.
   const lastIdx = (l: Lang) => {
+    if (!rows.some((row) => (row[l] ?? 0) > 0)) return -1;
     for (let i = rows.length - 1; i >= 0; i--) if (rows[i][l] !== null && rows[i][l] !== undefined) return i;
     return -1;
   };
+  const max = Math.max(1, ...rows.flatMap((row) => langs.map((l) => row[l] ?? 0)));
+  const lastVals: Partial<Record<Lang, number | null>> = {};
+  for (const l of langs) {
+    const i = lastIdx(l);
+    lastVals[l] = i >= 0 ? (rows[i][l] ?? null) : null;
+  }
+  const dys = endLabelOffsets(lastVals, max, log);
   return (
     <div className="h-[340px] w-full sm:h-[420px]">
       <ResponsiveContainer width="100%" height="100%">
@@ -50,7 +78,7 @@ function ReplayChart({ r, log }: { r: Replay; log: boolean }) {
           <XAxis dataKey="ts" type="number" scale="time" domain={[start, end]} ticks={ticks} tickFormatter={(v) => fmtShortDateTime(v)} {...AXIS} />
           <YAxis
             scale={log ? "log" : "linear"}
-            domain={log ? [1, "auto"] : [0, "auto"]}
+            domain={log ? [1, "auto"] : [0, (dataMax: number) => Math.max(10, dataMax)]}
             allowDataOverflow={log}
             tickFormatter={(v) => fmtInt(v)}
             width={64}
@@ -77,7 +105,7 @@ function ReplayChart({ r, log }: { r: Replay; log: boolean }) {
             stroke="#FF8A4C"
             strokeWidth={2}
             strokeDasharray="5 4"
-            label={{ value: quakeLabel, position: "top", fill: "#FF8A4C", fontSize: 12, fontWeight: 700, fontFamily: "JetBrains Mono, monospace" }}
+            label={{ value: quakeLabel, position: "insideTopRight", fill: "#FF8A4C", fontSize: 12, fontWeight: 700, fontFamily: "JetBrains Mono, monospace" }}
           />
           {langs.map((l) => (
             <Line
@@ -87,11 +115,11 @@ function ReplayChart({ r, log }: { r: Replay; log: boolean }) {
               name={LANG_CODE[l]}
               stroke={LANG_COLOR[l]}
               strokeWidth={2}
-              dot={false}
+              dot={{ r: 2.5, fill: LANG_COLOR[l], strokeWidth: 0 }}
               activeDot={{ r: 4, stroke: "#0A1020", strokeWidth: 2 }}
               connectNulls={false}
               isAnimationActive={false}
-              label={endLabel(l, lastIdx(l))}
+              label={endLabel(l, lastIdx(l), dys[l] ?? 0)}
             />
           ))}
           {r.series.map((s) =>
@@ -117,6 +145,7 @@ function ReplayChart({ r, log }: { r: Replay; log: boolean }) {
 export default function ReplayPage() {
   const replay = usePolling((s) => api.replayAlHaouz(s), 60000);
   const [log, setLog] = useState(false);
+  const [full, setFull] = useState(false);
   const r = replay.data;
   const expectedHours = r ? Math.round((new Date(r.end).getTime() - new Date(r.start).getTime()) / HOUR) + 1 : 49;
   const ordered = r ? [...r.series].sort((a, b) => LANGS.indexOf(a.lang) - LANGS.indexOf(b.lang)) : [];
@@ -125,7 +154,7 @@ export default function ReplayPage() {
     <div>
       <PageHeader icon="⏪" title="Rejouer : séisme d'Al Haouz">
         <p>
-          Le 8 septembre 2023 à 22:11 UTC, un séisme de magnitude 6,8 frappe la région d'Al Haouz, au sud de Marrakech. Voici les vues
+          Le 8 septembre 2023 à 22:11 UTC, un séisme de magnitude 6,8 (USGS) frappe la région d'Al Haouz, au sud de Marrakech. Voici les vues
           horaires des articles Wikipédia sur ce séisme, du 8 septembre 12:00 au 10 septembre 12:00 (UTC).
         </p>
       </PageHeader>
@@ -161,15 +190,23 @@ export default function ReplayPage() {
                 >
                   {fmtInt(r.hours_loaded)} heures chargées sur {fmtInt(expectedHours)}
                 </span>
+                <Toggle checked={full} onChange={setFull} label="Afficher les 49 h" />
                 <Toggle checked={log} onChange={setLog} label="Échelle logarithmique" />
               </div>
             }
           >
             <LangLegend className="mb-3" />
-            <ReplayChart r={r} log={log} />
+            {r.series.every((s) => s.total === 0) && (
+              <p className="mb-2 rounded-lg border border-line2 bg-night/50 px-3 py-2 text-xs text-ink-2">
+                Les heures chargées ({fmtInt(r.hours_loaded)}) ne contiennent encore aucune vue pour ces articles : la courbe montera dès que
+                les heures qui suivent le séisme seront chargées.
+              </p>
+            )}
+            <ReplayChart r={r} log={log} full={full} />
             <p className="mt-2 text-xs text-ink-3">
-              Axe horizontal : heures UTC. L'anglais a beaucoup plus de lecteurs : activez l'échelle logarithmique pour comparer la forme des
-              trois courbes.
+              Axe horizontal : heures UTC.{" "}
+              {full ? "Période complète (49 h)." : "Par défaut, seules les heures chargées (et l'heure du séisme) sont affichées."} L'anglais a
+              beaucoup plus de lecteurs : activez l'échelle logarithmique pour comparer la forme des trois courbes.
               {r.hours_loaded < expectedHours && " Les heures pas encore chargées apparaissent comme des trous."}
             </p>
           </Panel>
@@ -200,16 +237,18 @@ export default function ReplayPage() {
                   </p>
                   <p className="mt-1">
                     Titre à l'époque :{" "}
-                    <span dir={dirOf(s.lang)} className={`text-ink-2 ${s.lang === "ar" ? "font-arabic" : ""}`}>
+                    <LangText lang={s.lang} className="text-ink-2">
                       {s.title_at_time}
-                    </span>
+                    </LangText>
                   </p>
                   <details className="mt-1">
-                    <summary className="cursor-pointer text-cyan/80 hover:text-cyan">{fmtInt(s.titles_counted.length)} titres comptés</summary>
+                    <summary className="cursor-pointer text-cyan/80 hover:text-cyan">
+                      {fmtInt(s.titles_counted.length)} {s.titles_counted.length > 1 ? "titres comptés" : "titre compté"}
+                    </summary>
                     <ul className="mt-1 list-inside list-disc space-y-0.5">
                       {s.titles_counted.map((t) => (
-                        <li key={t} dir={dirOf(s.lang)} className={s.lang === "ar" ? "font-arabic" : ""}>
-                          {t}
+                        <li key={t}>
+                          <LangText lang={s.lang}>{t}</LangText>
                         </li>
                       ))}
                     </ul>

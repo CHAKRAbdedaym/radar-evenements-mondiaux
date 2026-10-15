@@ -2,15 +2,31 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import type { RadarItem } from "../api";
 import { fmtInt, fmtRelative, fmtDec1 } from "../lib/format";
-import { LANG_CODE, LANG_COLOR, LANG_NAME, articlePath, dirOf, hashString } from "../lib/lang";
+import { LANG_CODE, LANG_COLOR, LANG_NAME, articlePath, hashString } from "../lib/lang";
 import { useNow, useReducedMotion } from "../hooks/usePolling";
-import { LangBadge } from "./ui";
+import { LangBadge, LangText } from "./ui";
 
 const SIZE = 600; // viewBox is [-300, 300]
 const R = 270; // outer ring radius
 const SWEEP_MS = 6000;
 const CYAN = "#3FD0C9";
 const ALERT = "#FF8A4C";
+
+interface Box {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+const overlaps = (a: Box, b: Box, pad = 0) => a.x0 < b.x1 + pad && b.x0 < a.x1 + pad && a.y0 < b.y1 + pad && b.y0 < a.y1 + pad;
+const LABEL_CHARS = 26;
+
+interface LabelPos {
+  p: Placed;
+  text: string;
+  toLeft: boolean;
+  offset: number;
+}
 
 interface Placed {
   key: string;
@@ -102,23 +118,38 @@ function Blip({ p, active, reduced, onEnter, onLeave, onActivate }: {
   );
 }
 
-function Tooltip({ p, now }: { p: Placed; now: number }) {
-  const left = ((p.x + SIZE / 2) / SIZE) * 100;
-  const top = ((p.y + SIZE / 2) / SIZE) * 100;
-  const toLeft = p.x > 40;
+function Tooltip({ p, now, width }: { p: Placed; now: number; width: number }) {
+  const k = width / SIZE;
+  const cx = (p.x + SIZE / 2) * k;
+  const cy = (p.y + SIZE / 2) * k;
+  const w = Math.min(240, width - 16);
+  const gap = p.r * k + 12;
+  // Beside the blip when there is room, otherwise above/below it; always clamped inside the box.
+  let left: number;
+  let top: number;
+  let ty: string;
+  if (cx + gap + w <= width - 8) {
+    left = cx + gap;
+    top = cy;
+    ty = "-50%";
+  } else if (cx - gap - w >= 8) {
+    left = cx - gap - w;
+    top = cy;
+    ty = "-50%";
+  } else {
+    left = Math.min(Math.max(cx - w / 2, 8), width - w - 8);
+    top = cy < width / 2 ? cy + gap : cy - gap;
+    ty = cy < width / 2 ? "0" : "-100%";
+  }
   const it = p.item;
   return (
     <div
       role="tooltip"
-      className="pointer-events-none absolute z-20 w-60 rounded-xl border border-line2 bg-[#0d1528]/95 p-3 text-xs shadow-2xl backdrop-blur"
-      style={{
-        left: `${left}%`,
-        top: `${top}%`,
-        transform: `translate(${toLeft ? "calc(-100% - 18px)" : "18px"}, -50%)`,
-      }}
+      className="pointer-events-none absolute z-20 rounded-xl border border-line2 bg-[#0d1528]/95 p-3 text-xs shadow-2xl backdrop-blur"
+      style={{ left, top, width: w, transform: `translateY(${ty})` }}
     >
-      <p dir={dirOf(it.lang)} className={`text-sm font-semibold leading-snug text-white ${it.lang === "ar" ? "font-arabic" : ""}`}>
-        {it.title}
+      <p className="text-sm font-semibold leading-snug text-white">
+        <LangText lang={it.lang}>{it.title}</LangText>
       </p>
       <div className="mt-1.5 flex items-center gap-2 text-ink-2">
         <LangBadge lang={it.lang} /> Wikipédia en {LANG_NAME[it.lang]}
@@ -176,25 +207,52 @@ export default function RadarScope({ items, serverTime, windowMinutes, overlay }
     [placed],
   );
 
-  // Direct labels for the most active articles, skipping overlaps.
+  // Direct labels: alerts first, then most edits; a label is skipped if its box would overlap
+  // an already placed label, the ring-label column or the scope edge.
   const labels = useMemo(() => {
-    const max = width < 420 ? 3 : width < 560 ? 4 : 7;
+    const max = width < 420 ? 3 : width < 560 ? 4 : 6;
+    const k = width / SIZE;
     const ranked = [...placed].sort((a, b) => Number(b.item.alert) - Number(a.item.alert) || b.item.edits - a.item.edits);
-    const out: Placed[] = [];
+    const boxes: Box[] = [
+      // vertical column of ring labels (top axis) and the "maintenant" caption
+      { x0: width / 2 - 34, x1: width / 2 + 34, y0: (SIZE / 2 - R - 4) * k, y1: width / 2 + 4 },
+      { x0: width / 2 - 44, x1: width / 2 + 44, y0: width / 2 + 2, y1: width / 2 + 26 },
+    ];
+    const out: LabelPos[] = [];
     for (const p of ranked) {
       if (out.length >= max) break;
-      if (out.some((o) => Math.abs(o.y - p.y) < 30 && Math.abs(o.x - p.x) < 170)) continue;
-      out.push(p);
+      const text = p.item.title.length > LABEL_CHARS ? `${p.item.title.slice(0, LABEL_CHARS - 1)}…` : p.item.title;
+      const w = 52 + text.length * 6.1;
+      const h = 18;
+      const cx = (p.x + SIZE / 2) * k;
+      const cy = (p.y + SIZE / 2) * k;
+      const gap = p.r * k + 6;
+      let placedBox: Box | null = null;
+      let toLeft = false;
+      for (const left of p.x > 0 ? [true, false] : [false, true]) {
+        const b: Box = left
+          ? { x0: cx - gap - w, x1: cx - gap, y0: cy - h / 2, y1: cy + h / 2 }
+          : { x0: cx + gap, x1: cx + gap + w, y0: cy - h / 2, y1: cy + h / 2 };
+        if (b.x0 < 2 || b.x1 > width - 2) continue;
+        if (boxes.some((o) => overlaps(o, b, 3))) continue;
+        placedBox = b;
+        toLeft = left;
+        break;
+      }
+      if (!placedBox) continue;
+      boxes.push(placedBox);
+      out.push({ p, text, toLeft, offset: gap });
     }
     return out;
   }, [placed, width]);
+  const fs = Math.max(10, (10 * SIZE) / Math.max(width, 1)); // ~10px on screen at any size
 
   const active = placed.find((p) => p.key === (hover ?? selected)) ?? null;
   const ringMinutes = Array.from({ length: Math.max(1, windowMinutes) }, (_, i) => i + 1);
   const ringR = (min: number) => R * (0.07 + 0.9 * (min / Math.max(1, windowMinutes)));
 
   return (
-    <div ref={boxRef} className="relative mx-auto aspect-square w-full max-w-[640px] select-none" onMouseLeave={() => setHover(null)}>
+    <div ref={boxRef} className="relative mx-auto aspect-square w-full max-w-[640px] select-none [overflow-x:clip]" onMouseLeave={() => setHover(null)}>
       {/* Layer 1: scope background */}
       <svg viewBox={`${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`} className="absolute inset-0 h-full w-full" aria-hidden>
         <defs>
@@ -227,11 +285,6 @@ export default function RadarScope({ items, serverTime, windowMinutes, overlay }
             />
           );
         })}
-        {ringMinutes.map((m) => (
-          <text key={m} x={4} y={-ringR(m) + 12} fill="#7D89A6" fontSize={11} fontFamily="JetBrains Mono, monospace">
-            {m} min
-          </text>
-        ))}
         <circle r={3} fill={CYAN} />
       </svg>
 
@@ -250,7 +303,7 @@ export default function RadarScope({ items, serverTime, windowMinutes, overlay }
       </div>
 
       {/* Layer 3: blips */}
-      <svg viewBox={`${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`} className="absolute inset-0 h-full w-full overflow-visible" aria-label="Radar des articles actifs">
+      <svg viewBox={`${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`} className="absolute inset-0 h-full w-full overflow-hidden" aria-label="Radar des articles actifs">
         {drawOrder.map((p) => (
           <Blip
             key={p.key}
@@ -272,15 +325,13 @@ export default function RadarScope({ items, serverTime, windowMinutes, overlay }
 
       {/* Layer 4: direct labels (HTML for proper Arabic shaping / RTL) */}
       <div className="pointer-events-none absolute inset-0" aria-hidden>
-        {labels.map((p) => {
+        {labels.map(({ p, text, toLeft, offset }) => {
           const left = ((p.x + SIZE / 2) / SIZE) * 100;
           const top = ((p.y + SIZE / 2) / SIZE) * 100;
-          const toLeft = p.x > 60;
-          const offset = (p.r / SIZE) * width + 6;
           return (
             <div
               key={p.key}
-              className="absolute flex max-w-[44%] items-center gap-1 whitespace-nowrap rounded bg-night/70 px-1 py-px text-[11px] leading-tight text-ink-2"
+              className="absolute flex items-center gap-1 whitespace-nowrap rounded border border-line/60 bg-night/80 px-1 py-px text-[11px] leading-tight text-ink-2"
               style={{
                 left: `${left}%`,
                 top: `${top}%`,
@@ -289,21 +340,29 @@ export default function RadarScope({ items, serverTime, windowMinutes, overlay }
               }}
             >
               <span className={`font-mono text-[10px] font-bold ${p.item.alert ? "text-alert" : "text-ink"}`}>{LANG_CODE[p.item.lang]}</span>
-              <span dir={dirOf(p.item.lang)} className={`truncate ${p.item.lang === "ar" ? "font-arabic" : ""}`}>
-                {p.item.title}
-              </span>
+              <LangText lang={p.item.lang}>{text}</LangText>
               <span className="num text-[10px] text-ink-3">×{p.item.edits}</span>
             </div>
           );
         })}
       </div>
 
-      {/* Edge captions */}
-      <p className="pointer-events-none absolute left-1/2 top-1/2 mt-3 -translate-x-1/2 font-mono text-[10px] uppercase tracking-widest text-ink-3" aria-hidden>
-        maintenant
-      </p>
+      {/* Ring labels on one clean axis (top), above the blips, with a panel-colored backing */}
+      <svg viewBox={`${-SIZE / 2} ${-SIZE / 2} ${SIZE} ${SIZE}`} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+        {[...ringMinutes.map((m) => ({ key: `r${m}`, y: -ringR(m), text: `${m} min` })), { key: "now", y: fs * 1.6, text: "maintenant" }].map((l) => {
+          const w = l.text.length * fs * 0.62 + fs * 0.9;
+          return (
+            <g key={l.key} transform={`translate(0, ${l.y})`} opacity={0.82}>
+              <rect x={-w / 2} y={-fs * 0.72} width={w} height={fs * 1.44} rx={fs * 0.35} fill="#121B30" fillOpacity={0.9} stroke="#2A3A5E" strokeWidth={0.6} />
+              <text textAnchor="middle" dy={fs * 0.36} fill="#A9B4CC" fontSize={fs} fontFamily="JetBrains Mono, monospace">
+                {l.text}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
 
-      {active && <Tooltip p={active} now={now} />}
+      {active && <Tooltip p={active} now={now} width={width} />}
 
       {overlay && (
         <div className="absolute inset-0 flex items-center justify-center">

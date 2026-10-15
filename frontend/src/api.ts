@@ -1,4 +1,4 @@
-import { setRefTime } from "./lib/clock";
+import { setFeedStatus, setRefTime } from "./lib/clock";
 
 // Typed client for the Radar API (docs/CONTRACT.md §7). All endpoints are GET + JSON.
 
@@ -267,6 +267,7 @@ export const api = {
   stats: (signal?: AbortSignal) =>
     get<Stats>("/stats", undefined, signal).then((d) => {
       setRefTime(d.ref_time);
+      setFeedStatus(d.ref_time, d.ingestion_rate_per_min);
       return d;
     }),
 

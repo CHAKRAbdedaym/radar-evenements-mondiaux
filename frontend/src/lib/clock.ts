@@ -29,3 +29,22 @@ export function onRefTime(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
+
+/** Latest ingestion status from /api/stats (ingestion rate is measured on processing time). */
+export interface FeedStatus {
+  refTime: string | null;
+  ratePerMin: number | null;
+}
+let feed: FeedStatus = { refTime: null, ratePerMin: null };
+
+export function setFeedStatus(refTime: string | null | undefined, ratePerMin: number | null | undefined): void {
+  feed = { refTime: refTime ?? feed.refTime, ratePerMin: ratePerMin ?? feed.ratePerMin };
+  listeners.forEach((l) => l());
+}
+
+export function getFeedStatus(): FeedStatus {
+  return feed;
+}
+
+/** Below this many docs ingested per minute the live feed is considered slowed down. */
+export const SLOW_FEED_PER_MIN = 20;

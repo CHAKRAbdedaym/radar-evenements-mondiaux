@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api";
+import { PageErrorBoundary } from "./ErrorBoundary";
 import { usePolling } from "../hooks/usePolling";
 
 const NAV = [
@@ -91,7 +92,7 @@ export default function Layout() {
   }, [open]);
 
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="app-shell min-h-screen lg:flex">
       <ClockSync />
       <a href="#contenu" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-panel focus:p-2">
         Aller au contenu
@@ -151,7 +152,9 @@ export default function Layout() {
 
       <main id="contenu" className="min-w-0 flex-1 px-4 pb-16 pt-6 sm:px-6 lg:px-10 lg:pt-8">
         <div className="mx-auto max-w-[1280px]">
-          <Outlet />
+          <PageErrorBoundary key={loc.pathname}>
+            <Outlet />
+          </PageErrorBoundary>
         </div>
       </main>
     </div>

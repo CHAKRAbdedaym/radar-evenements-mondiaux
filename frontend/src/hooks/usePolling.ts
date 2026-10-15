@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onRefTime, refNow } from "../lib/clock";
+import { getFeedStatus, onRefTime, refNow, type FeedStatus } from "../lib/clock";
 
 export interface PollState<T> {
   data: T | null;
@@ -128,4 +128,11 @@ export function useReducedMotion(): boolean {
     return () => mq.removeEventListener("change", on);
   }, []);
   return reduced;
+}
+
+/** Latest feed status (reference time + ingestion rate), updated whenever /api/stats answers. */
+export function useFeedStatus(): FeedStatus {
+  const [f, setF] = useState<FeedStatus>(() => getFeedStatus());
+  useEffect(() => onRefTime(() => setF(getFeedStatus())), []);
+  return f;
 }

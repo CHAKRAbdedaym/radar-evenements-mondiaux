@@ -199,9 +199,11 @@ export default function ExplorerPage() {
                     </div>
                   </div>
                   {tab === "pageviews" && view === "table" ? (
-                    <PageviewsTable docs={d.docs} />
+                    <div className="max-h-[70vh] overflow-y-auto">
+                      <PageviewsTable docs={d.docs} />
+                    </div>
                   ) : (
-                    <ul className="space-y-3">
+                    <ul className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
                       {d.docs.map((doc, i) => (
                         <li key={String(doc._id ?? i)}>
                           <JsonView value={doc} />

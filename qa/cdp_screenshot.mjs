@@ -55,7 +55,8 @@ await send("Log.enable");
 await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile });
 if (mobile) await send("Emulation.setTouchEmulationEnabled", { enabled: true });
 for (const spec of pages) {
-  const [name, path] = spec.split("=");
+  const i = spec.indexOf("="); // split on the first "=" only (paths may contain ?q=...)
+  const name = spec.slice(0, i), path = spec.slice(i + 1);
   await send("Page.navigate", { url: base + path });
   await sleep(6000); // let data polling + animations settle
   const { result } = await send("Runtime.evaluate", {
@@ -74,6 +75,7 @@ for (const spec of pages) {
     clip: { x: 0, y: 0, width: W, height: fullH, scale: 1 },
   });
   if (fullH > H) await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile });
+  if (!shot.result) { console.log(`${name}: capture failed ${JSON.stringify(shot.error)} dims=${JSON.stringify(dims)}`); continue; }
   const file = join(outDir, `${name}.png`);
   writeFileSync(file, Buffer.from(shot.result.data, "base64"));
   console.log(`${file} scrollWidth=${dims.w} (viewport ${W})${dims.w > W ? "  <-- HORIZONTAL OVERFLOW" : ""}`);
