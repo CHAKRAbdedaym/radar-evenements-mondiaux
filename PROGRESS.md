@@ -10,15 +10,17 @@
 | 1 | infra (compose, mongo, mongo-express, init script) | ✅ done | mongo healthy (waits for init), 6 collections + all contract indexes verified, mongo-express 401 without auth / 200 with, both bound to 127.0.0.1. Commit 4997ba5. |
 | 2 | edits-streamer | ✅ done | 1,587 real edits after ~15 min (ar 52/12 bot, fr 137/40, en 995/351), Last-Event-ID checkpoint + resume verified, 0 errors, 28 MiB. |
 | 3 | diff-worker | ✅ done | 1,155 edit_texts (real wikitext added/removed, ar/fr/en), 0 errors, ≤5 req/s. |
-| 4 | pageviews-loader | ⚠️ partial (network) | 1 hour test 2023-09-08T22: 60.6 MB, 7,188,874 lines read, 99,730 rows (min 20), ~52-75 s, re-run skipped. Full 49 h range running in background (log in scratchpad pageviews-full.log). Earthquake titles absent from the 22:00 dump (article created after the quake). |
+| 4 | pageviews-loader | 🟡 loading spike hours 2023-09-08T20 → 09-09T06 (medium dataset) | 1 hour test 2023-09-08T22: 60.6 MB, 7,188,874 lines read, 99,730 rows (min 20), ~52-75 s, re-run skipped. Full 49 h range running in background (log in scratchpad pageviews-full.log). Earthquake titles absent from the 22:00 dump (article created after the quake). |
 | 5 | detector | ✅ done | event-time window, ~380 articles scored/cycle, 0 alerts yet: history 0.14 h → provisoire baseline (median 1) → needs ≥5 edits by ≥3 users in 5 min. Alert path proven on a throwaway db. Article baseline needs ≥6 h of stream. |
 | 6 | backend | ✅ done | all §7 endpoints curl-verified on real data, stats ~6 ms, radar ~14 ms, IXSCAN only, event-time ref (skew 3605 s measured). Replay/pageviews re-check after full load. |
-| 7 | frontend + 2 polish rounds | 🟡 polish round 1 | all 7 pages built (tsc 0 errors), committed. Screenshots by orchestrator (headless Chrome desktop + qa/cdp_screenshot.mjs for true 390px; Playwright image pull impossible on slow network). Round 1 fixes sent: radar blank on mobile, ring/blip label collisions, alert relative time from window_end, replay labels + bdi for Arabic, body bg. | |
-| 8 | full QA from scratch | ⏳ todo | |
-| 9 | README / docs | 🟡 docs-writer running | |
+| 7 | frontend + 2 polish rounds | ✅ done | 7 pages, tsc 0 errors, no overflow at 390 px, no console errors. Round 1: mobile radar, label collisions, event-time relative times, bdi for Arabic, consistent counts, slow-feed badge. Round 2: alerts grouped per article, clearer lag wording, replay partial data (EN peak 261 views at 2023-09-08 23:00 UTC, real). Commit 4c0ef9d. |
+| 8 | full QA from scratch | 🟡 qa-verifier running (non-destructive part); down/up from scratch after the pageviews load |
+| 9 | README / docs | ✅ written (14 sections, 6 mongosh queries run on real data); final review after QA |
 | 10 | final report | ⏳ todo | |
 
 ## Decisions
+- Detector cooldown in EVENT time (window_end) — fixed a duplicate alert created when the stream stalled (2026-10-15).
+- Pageviews loaded for the demo: 2023-09-08 12h, 13h, 20h→2023-09-09 06h (slow network); full 49 h range = same command with the default range.
 - **Pageviews volume**: measured on the real hour 2023-09-08 22:00: 7,188,874 lines, 2,421,652 merged ar/fr/en rows (≥5: 424,282; ≥10: 208,727; ≥20: 99,730; ≥50: 33,937). Full 48 h ≈ 116M docs ≈ 15+ GB > 30 GB free disk budget. User asked for a **medium dataset** → `PAGEVIEWS_MIN_VIEWS=20` (≈ 5M docs for 49 h). Watchlist titles always kept. README must explain the full-scale run and the 30 GB limit.
 - Commits: author CHAKRAbdedaym <chkradobl@gmail.com>, **no Co-Authored-By trailer** (history rewritten + force-pushed once). Push after each step.
 - Subagents: custom agent types are not loaded in this session → orchestrator runs them as `general-purpose` agents whose prompt starts with the content of `.claude/agents/<name>.md`, with the model from the table (sonnet/opus/haiku).
