@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import requests
+import urllib3
 from pymongo import UpdateOne
 from pymongo.errors import PyMongoError
 
@@ -27,7 +28,7 @@ log = get_logger("pageviews")
 BASE_URL = "https://dumps.wikimedia.org/other/pageviews/{y}/{y}-{m:02d}/pageviews-{y}{m:02d}{d:02d}-{h:02d}0000.gz"
 DOMAINS = {b"ar": "ar", b"fr": "fr", b"en": "en", b"ar.m": "ar", b"fr.m": "fr", b"en.m": "en"}
 PROGRESS_SECONDS = 10
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 5
 
 
 class HourNotFound(Exception):
@@ -103,11 +104,12 @@ def process_hour(h: datetime, db, watch, min_views: int, bulk_size: int, force: 
             log.error("%s: %s", hid, msg)
             _finish(db, hid, stats, t0, "error", msg)
             return "error", msg
-        except (requests.RequestException, OSError, EOFError, PyMongoError, zlib.error) as exc:
+        # urllib3 errors surface when reading resp.raw directly (e.g. ReadTimeoutError on a slow mirror)
+        except (requests.RequestException, urllib3.exceptions.HTTPError, OSError, EOFError, PyMongoError, zlib.error) as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             log.warning("%s: attempt %d/%d failed: %s", hid, attempt, MAX_ATTEMPTS, last_err)
             if attempt < MAX_ATTEMPTS:
-                STOP.wait(5 * attempt)
+                STOP.wait(10 * attempt)
             continue
         else:
             _finish(db, hid, stats, t0, "done", None)
@@ -133,7 +135,7 @@ def run_hour(h, url, db, watch, min_views, bulk_size, stats: Stats, session, t0,
     # merged total when writing. Keys are raw bytes to keep the per-hour dict compact.
     merged = {"ar": {}, "fr": {}, "en": {}}
     last_progress = time.monotonic()
-    with session.get(url, stream=True, timeout=(15, 60), headers={"Accept-Encoding": "identity"}) as resp:
+    with session.get(url, stream=True, timeout=(15, 180), headers={"Accept-Encoding": "identity"}) as resp:
         if resp.status_code == 404:
             raise HourNotFound()
         if resp.status_code == 429:
@@ -244,6 +246,7 @@ def main(argv=None):
         except Exception as exc:  # keep going with other hours
             log.exception("%s: unexpected failure", hour_id(hour))
             status, msg = "error", f"{type(exc).__name__}: {exc}"
+            common.log_upsert(db, hour_id(hour), {"status": "error", "error": msg, "finished_at": common.utcnow()})
         return hour, status, msg
 
     results = {}
