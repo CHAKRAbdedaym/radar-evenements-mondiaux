@@ -1,0 +1,125 @@
+# Radar d'evenements mondiaux - compose project name comes from COMPOSE_PROJECT_NAME in .env (radar).
+# Usage: docker compose up -d --build
+#        docker compose --profile batch run --rm pageviews-loader --start 2023-09-08T12 --end 2023-09-10T12
+#        docker compose --profile qa run --rm qa
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-ingestion: &ingestion
+  build:
+    context: ./ingestion
+  image: radar-ingestion:latest
+  env_file: .env
+  restart: unless-stopped
+  logging: *default-logging
+  depends_on:
+    mongo:
+      condition: service_healthy
+
+name: radar
+
+services:
+  mongo:
+    image: mongo:7
+    command: ["--bind_ip_all", "--wiredTigerCacheSizeGB", "1"]
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+      - ./mongo/init:/docker-entrypoint-initdb.d:ro,Z
+    healthcheck:
+      # Connect through the container IP: during first-start init the temporary mongod only
+      # listens on 127.0.0.1, so the service becomes healthy only once the real server is up.
+      test: ["CMD-SHELL", "mongosh --quiet --host \"$$(hostname -i | cut -d' ' -f1)\" --eval \"db.adminCommand('ping')\" >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
+    restart: unless-stopped
+    logging: *default-logging
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    ports:
+      - "127.0.0.1:${ME_PORT:-8081}:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+      ME_CONFIG_BASICAUTH: "true"
+      ME_CONFIG_BASICAUTH_USERNAME: ${ME_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_PASSWORD:?ME_PASSWORD must be set in .env}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  edits-streamer:
+    <<: *ingestion
+    command: ["python", "-m", "radar_ingest.streamer"]
+
+  diff-worker:
+    <<: *ingestion
+    command: ["python", "-m", "radar_ingest.diff_worker"]
+
+  detector:
+    <<: *ingestion
+    command: ["python", "-m", "radar_ingest.detector"]
+
+  pageviews-loader:
+    <<: *ingestion
+    profiles: ["batch"]
+    entrypoint: ["python", "-m", "radar_ingest.pageviews"]
+    command: []
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+    image: radar-backend:latest
+    env_file: .env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./frontend
+    image: radar-frontend:latest
+    ports:
+      - "${APP_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  qa:
+    image: mcr.microsoft.com/playwright/python:v1.48.0-jammy
+    profiles: ["qa"]
+    working_dir: /qa
+    volumes:
+      - ./qa:/qa:Z
+    environment:
+      APP_URL: http://frontend:5173
+    ipc: host
+    depends_on:
+      - frontend
+    logging: *default-logging
+
+volumes:
+  mongo-data:
