@@ -77,12 +77,26 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export default function Layout() {
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => {
     setOpen(false);
     window.scrollTo(0, 0);
+    // Per-page tab title: article pages show the article title, others the nav label.
+    const base = "Radar d'événements mondiaux";
+    const art = loc.pathname.match(/^\/article\/[a-z]{2}\/(.+)$/);
+    const nav = NAV.find((n) => (n.end ? loc.pathname === n.to : loc.pathname.startsWith(n.to)));
+    const page = art ? safeDecode(art[1]) : nav?.label;
+    document.title = page && nav?.to !== "/" ? `${page} · ${base}` : base;
   }, [loc.pathname]);
   useEffect(() => {
     if (!open) return;

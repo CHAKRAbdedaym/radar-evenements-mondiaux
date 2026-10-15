@@ -200,7 +200,19 @@ db.pageviews.find(
 ).sort({hour: 1}).toArray()
 ```
 
-Tant que les heures du 9 septembre 2023 ne sont pas chargées, cette requête renvoie `[]`. Seules les heures 12h, 13h et 22h du 8 septembre sont chargées aujourd'hui, et l'article n'existait pas encore à 22h. Pour vérifier que la requête fonctionne, elle a été testée avec un article présent (`Cookie (informatique)`, 315 543 vues à 12h le 8 septembre).
+Sortie réelle (heures chargées pour la démo : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC). Aucune vue avant 22:11 (l'article n'existait pas), puis le pic :
+
+```
+en 08/09 23:00 238
+fr 09/09 00:00 57
+en 09/09 00:00 1572
+fr 09/09 01:00 230
+en 09/09 01:00 873
+fr 09/09 02:00 221
+en 09/09 02:00 1005
+fr 09/09 03:00 188
+en 09/09 03:00 1534
+```
 
 **5. Recherche texte dans les modifications**
 
@@ -286,12 +298,14 @@ Avec l'image Playwright (si elle est disponible) : `docker compose --profile qa 
 
 - **Volume de démonstration** : `PAGEVIEWS_MIN_VIEWS=20` ; l'échelle réelle exige un disque de 50 Go (voir section 6).
 - **Réseau** : un chargement de vues interrompu (lenteur réseau) laisse les heures en `error`. Elles sont reprises en relançant le chargeur.
-- **Données du séisme** : les heures du 9 septembre doivent être chargées pour que la section rejouer et la requête 4 affichent des vues.
+- **Données du séisme** : pour la démo (connexion lente), 10 heures sont chargées : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC (904 116 lignes). Relancer la commande de chargement complète les 49 heures (les heures déjà faites sont sautées).
 - **Recherche** : elle ne porte que sur les modifications du flux en direct, pas sur les textes de 2023.
 - **Détecteur** : pendant les 6 premières heures, la référence est « provisoire » ; la référence complète demande 6 heures d'historique.
 - **Temps** : le flux peut prendre du retard sur l'horloge murale (voir section 10).
 - **Sécurité** : MongoDB sans authentification (accès local seulement). L'API et l'application écoutent sur toutes les interfaces : à restreindre hors démo.
 - **Pas de haute disponibilité** : un seul conteneur par service.
+- **Redémarrage automatique** : `restart: unless-stopped` relance un service qui plante, mais pas un conteneur arrêté à la main (`docker kill` / `docker stop` = arrêt volontaire pour Docker). Pour la démo, utiliser `docker compose restart <service>`.
+- **Textes retirés** : quelques `removed_text` contiennent des restes de wikitexte (`[[ ]]`) quand la modification ne change que des liens.
 
 **Phase 2 : Kafka.** Découpler l'ingestion du stockage : le streamer publie les événements dans un topic Kafka, et les consommateurs écrivent dans MongoDB et calculent les scores.
 
