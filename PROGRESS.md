@@ -41,3 +41,31 @@
 
 ## Next
 - `git push`; optionally load the remaining pageviews hours; let the stream run ≥ 6 h before the demo so the detector uses per-article baselines.
+
+# Phase finale (thèmes + objets + redesign) — started 2026-10-24
+
+Goals (teacher feedback): (a) data organized by THEMES with a page for EACH OBJECT (event, article); (b) redesign the frontend so it looks hand-crafted (editorial newsroom), not AI-made.
+
+## State at start (2026-10-24 22:21 UTC, measured)
+- Stack was stopped; `docker compose up -d` → 7 services Up (mongo/backend/frontend healthy). Volume `radar_mongo-data` intact.
+- MongoDB `radar`: edits 113,827 (77,999 distinct articles: en 57,831 · fr 12,367 · ar 7,801; 53,060 with human edits) · edit_texts 44,482 · pageviews 904,116 (10 hours) · alerts 32 (28 distinct articles, 2026-10-15 19:18 → 10-16 15:37) · scores 1,072 · ingestion_log 21. DB 208 MB (data 169 MB, indexes 125 MB). Disk free: 27 GB.
+- Stream position: replaying the backlog, newest edit = 2026-10-17 19:25 UTC (Last-Event-ID resume) while real time is 10-24. The detector only scores the current window, so windows skipped during catch-up produced no alerts.
+- Pageviews pic hours 2023-09-08 12h,13h,20h → 09-09 03h loaded.
+
+## Steps
+| # | step | status | proof / notes |
+|---|---|---|---|
+| F0 | state + backup + before screenshots + design audit | 🟡 audit pending | backup `backups/radar-20261024T2221-phase-finale.archive.gz` (43 MB, mongorestore --dryRun OK). 14 screenshots in `qa/before/` (7 pages × desktop 1440 / mobile 390) via new `qa/shoot.sh`. design-critic audit → `docs/DESIGN_AUDIT.md`: waiting for Claude Code restart (new agent type not detected mid-session). |
+| F1 | CONTRACT v2.0 + design-critic agent + DESIGN_SYSTEM.md | ✅ done | `docs/CONTRACT.md` v2.0 (§4a themes, §5.7 articles, §5.8 wikidata_entities, §5.9 events, §6 enricher + detector events, §7 new endpoints). `.claude/agents/design-critic.md` created; 6 agents updated with the phase goals. `docs/DESIGN_SYSTEM.md` written. |
+| F2 | enricher + themes_mapping.yaml | ⏳ | data-ingestion |
+| F3 | detector events + backfill + Al Haouz historique | ⏳ | data-ingestion |
+| F4 | backend endpoints v2 | ⏳ | backend-api |
+| F5 | frontend rebuild (editorial) | ⏳ | frontend-ui |
+| F6 | design loop ≥ 3 rounds, every page ≥ 8/10 | ⏳ | qa-verifier + design-critic |
+| F7 | full QA from clean build (keep volume) | ⏳ | qa-verifier |
+| F8 | README + docs | ⏳ | docs-writer |
+| F9 | final report (FR) | ⏳ | orchestrator |
+
+## Next (after restart: "read PROGRESS.md and continue")
+1. Check `design-critic` is listed as an agent type. Run the audit (F0) on `qa/before/`.
+2. In parallel: data-ingestion → F2 (enricher, CONTRACT §5.7/§5.8/§6) ; then F3 ; backend-api → F4 once F2 schemas exist (can start on contract shapes) ; frontend-ui → design tokens + shell (F5) right after the audit.
