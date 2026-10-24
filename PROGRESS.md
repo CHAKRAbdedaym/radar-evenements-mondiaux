@@ -55,12 +55,12 @@ Goals (teacher feedback): (a) data organized by THEMES with a page for EACH OBJE
 ## Steps
 | # | step | status | proof / notes |
 |---|---|---|---|
-| F0 | state + backup + before screenshots + design audit | 🟡 audit pending | backup `backups/radar-20261024T2221-phase-finale.archive.gz` (43 MB, mongorestore --dryRun OK). 14 screenshots in `qa/before/` (7 pages × desktop 1440 / mobile 390) via new `qa/shoot.sh`. design-critic audit → `docs/DESIGN_AUDIT.md`: waiting for Claude Code restart (new agent type not detected mid-session). |
+| F0 | state + backup + before screenshots + design audit | ✅ done | backup `backups/radar-20261024T2221-phase-finale.archive.gz` (43 MB, mongorestore --dryRun OK). 14 screenshots in `qa/before/` (7 pages × desktop 1440 / mobile 390) via new `qa/shoot.sh`. `docs/DESIGN_AUDIT.md`: current UI 3/10 (radar 3, alertes 2.5, rejouer 4.5, explorateur 3.5, recherche 3, projet 3, article 3); corrections folded into DESIGN_SYSTEM + contract v2.1 (significance / lead rule). Stream switched back to live 2026-10-24 22:41 (user: « ok direct »). |
 | F1 | CONTRACT v2.0 + design-critic agent + DESIGN_SYSTEM.md | ✅ done | `docs/CONTRACT.md` v2.0 (§4a themes, §5.7 articles, §5.8 wikidata_entities, §5.9 events, §6 enricher + detector events, §7 new endpoints). `.claude/agents/design-critic.md` created; 6 agents updated with the phase goals. `docs/DESIGN_SYSTEM.md` written. |
-| F2 | enricher + themes_mapping.yaml | ⏳ | data-ingestion |
-| F3 | detector events + backfill + Al Haouz historique | ⏳ | data-ingestion |
-| F4 | backend endpoints v2 | ⏳ | backend-api |
-| F5 | frontend rebuild (editorial) | ⏳ | frontend-ui |
+| F2 | enricher + themes_mapping.yaml | ✅ done (backfill continues) | commit 21651b0. 332 QIDs verified (`themes --verify`). At 8,600 articles: wikidata 66 %, catégories 10 %, mots-clés 0.1 %, inconnu 24 % (autres 24 % < 40 % gate). All alert / radar / 24 h articles enriched. Review found wrong P279 chains (commune → electoral unit → politique; violent crime → disaster) → fix in progress with F3. |
+| F3 | detector events + backfill + Al Haouz historique | 🟡 in progress | + coverage-aware baseline (7-day gap 10-17 → 10-24) + --backfill-alerts |
+| F4 | backend endpoints v2 | ✅ done | commit a80fa05. /api/themes, /themes/timeline, /themes/classification, /themes/{id}, /events, /events/{id}, /frontpage; theme fields on live endpoints; background cache (warm 1–25 ms). api_check v2: 3,456 OK on real db (4 pre-existing/race). Re-verify with real events after F3. |
+| F5 | frontend rebuild (editorial) | 🟡 in progress | frontend-ui (opus) |
 | F6 | design loop ≥ 3 rounds, every page ≥ 8/10 | ⏳ | qa-verifier + design-critic |
 | F7 | full QA from clean build (keep volume) | ⏳ | qa-verifier |
 | F8 | README + docs | ⏳ | docs-writer |
