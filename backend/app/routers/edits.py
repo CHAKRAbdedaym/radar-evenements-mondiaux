@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 
+from app.annotate import annotate
 from app.db import db
 from app.util import (check_lang, check_minutes, clamp_limit, edit_item, floor_bucket, iso,
                       ref_time)
@@ -24,7 +25,7 @@ async def recent(lang: Optional[str] = None, include_bots: bool = False, limit: 
     lang = check_lang(lang)
     limit = clamp_limit(limit, 200)
     docs = await db.edits.find(_flt(lang, include_bots)).sort("timestamp", -1).limit(limit).to_list(limit)
-    return {"ref_time": iso(await ref_time()), "items": [edit_item(d) for d in docs]}
+    return {"ref_time": iso(await ref_time()), "items": await annotate([edit_item(d) for d in docs])}
 
 
 @router.get("/top")
@@ -49,11 +50,11 @@ async def top(minutes: int = 60, lang: Optional[str] = None, include_bots: bool 
     rows = await db.edits.aggregate(pipeline).to_list(limit)
     return {
         "minutes": minutes,
-        "items": [{
+        "items": await annotate([{
             "lang": r["_id"]["lang"], "title": r["_id"]["title"], "edits": r["edits"],
             "distinct_users": r["distinct_users"], "delta_bytes": r["delta_bytes"],
             "last_edit": iso(r["last_edit"]),
-        } for r in rows],
+        } for r in rows]),
     }
 
 

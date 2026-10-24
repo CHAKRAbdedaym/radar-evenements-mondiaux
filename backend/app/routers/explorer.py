@@ -14,6 +14,9 @@ KINDS = {
     "alerts": "system",
     "ingestion_log": "system",
     "scores": "system",
+    "articles": "semi-structured",
+    "events": "derived",
+    "wikidata_entities": "semi-structured",
 }
 SORTS = {
     "edits": [("timestamp", -1)],
@@ -22,6 +25,9 @@ SORTS = {
     "alerts": [("created_at", -1)],
     "ingestion_log": [("_id", -1)],
     "scores": [("computed_at", -1)],
+    "articles": [("enriched_at", -1)],
+    "events": [("last_activity", -1)],
+    "wikidata_entities": [("fetched_at", -1)],
 }
 MAX_SKIP = 100000
 

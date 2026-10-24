@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 
+from app.annotate import annotate
 from app.db import ALERT_COOLDOWN_MINUTES, WINDOW_MINUTES, db
 from app.util import check_lang, iso, ref_time
 
@@ -52,4 +53,4 @@ async def radar(lang: Optional[str] = None, include_bots: bool = False):
             "baseline_type": s.get("baseline_type") if s else None,
             "alert": k in alerted,
         })
-    return {"window_minutes": WINDOW_MINUTES, "time": iso(now), "items": items}
+    return {"window_minutes": WINDOW_MINUTES, "time": iso(now), "items": await annotate(items)}

@@ -4,12 +4,15 @@ from typing import Optional
 
 from fastapi import APIRouter
 
+from app.annotate import annotate
 from app.db import db
+from app.themes import check_theme
 from app.util import bad, check_lang, clamp_limit, iso
 
 router = APIRouter(tags=["search"])
 
 SNIPPET = 240
+TEXT_CANDIDATES = 1000  # with theme=, the filter applies to the best 1000 text matches
 
 
 def _fold_char(c: str) -> str:
@@ -42,19 +45,37 @@ def make_snippet(text: Optional[str], terms: list) -> Optional[str]:
 
 
 @router.get("/search")
-async def search(q: str = "", lang: Optional[str] = None, limit: int = 20):
+async def search(q: str = "", lang: Optional[str] = None, theme: Optional[str] = None, limit: int = 20):
     q = q.strip()
     if len(q) < 2 or len(q) > 100:
         raise bad("q must be between 2 and 100 characters")
     lang = check_lang(lang)
+    theme = check_theme(theme)
     limit = clamp_limit(limit, 50)
     flt: dict = {"$text": {"$search": q}}
     if lang:
         flt["lang"] = lang
     score = {"$meta": "textScore"}
-    docs = await db.edit_texts.find(
-        flt, {"lang": 1, "title": 1, "rev_new": 1, "timestamp": 1, "comment": 1, "added_text": 1, "score": score}
-    ).sort([("score", score)]).limit(limit).to_list(limit)
+    if theme:
+        # theme filter (articles.theme): best TEXT_CANDIDATES text matches, joined with `articles`
+        pipeline = [
+            {"$match": flt},
+            {"$addFields": {"score": score, "_aid": {"$concat": ["$lang", ":", "$title"]}}},
+            {"$sort": {"score": -1}},
+            {"$limit": TEXT_CANDIDATES},
+            {"$lookup": {"from": "articles", "localField": "_aid", "foreignField": "_id", "as": "a",
+                         "pipeline": [{"$project": {"theme": 1}}]}},
+            {"$match": {"a.theme": theme}},
+            {"$limit": limit},
+            {"$project": {"lang": 1, "title": 1, "rev_new": 1, "timestamp": 1, "comment": 1,
+                          "added_text": 1, "score": 1}},
+        ]
+        docs = await db.edit_texts.aggregate(pipeline, allowDiskUse=True).to_list(limit)
+    else:
+        docs = await db.edit_texts.find(
+            flt, {"lang": 1, "title": 1, "rev_new": 1, "timestamp": 1, "comment": 1, "added_text": 1,
+                  "score": score}
+        ).sort([("score", score)]).limit(limit).to_list(limit)
 
     terms = [t for t in re.findall(r"\w+", q) if len(t) >= 2] or [q]
     items = []
@@ -66,4 +87,5 @@ async def search(q: str = "", lang: Optional[str] = None, limit: int = 20):
             "timestamp": iso(d.get("timestamp")), "comment": d.get("comment"),
             "snippet": snippet, "score": round(d.get("score", 0), 3),
         })
+    await annotate(items)
     return {"q": q, "count": len(items), "items": items}

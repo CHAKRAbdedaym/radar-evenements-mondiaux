@@ -405,6 +405,106 @@ for col in ["users", "system.users", "admin", "..", "EDITS", "edits%20", "%24cmd
 c, dd, _, _ = get("/api/explorer/edits?skip=abc")
 print("  explorer skip=abc ->", c, str(dd)[:100])
 
+# ---------------------------------------------------------------- v2 (themes, events, frontpage)
+print("== v2 themes / events / frontpage")
+THEME_IDS = ["catastrophes", "conflits", "politique", "sport", "personnalites", "culture", "science",
+             "economie", "sante", "autres"]
+N24 = lambda v: isinstance(v, list) and len(v) == 24 and all(isnum(x) for x in v)
+ev_spec = {"id": S, "kind": S, "qid": (S, True), "theme": S, "theme_label": S, "title": S, "titles": lambda v: isinstance(v, dict),
+           "description": (S, True), "thumbnail_url": (S, True), "first_seen": iso, "last_activity": iso,
+           "peak_z": (isnum, True), "peak_at": (iso, True), "langs": L, "total_edits": isint, "distinct_users": isint,
+           "alerts_count": isint, "status": lambda v: v in ("en cours", "terminé", "historique"),
+           "significance": isnum, "lead_eligible": B, "spark": N24}
+
+c, d = timed("themes", "/api/themes")
+check("themes 200", c == 200)
+shape("themes", d, {"ref_time": iso, "items": L})
+if c == 200:
+    check("themes: 10 ids in order", [i["id"] for i in d["items"]] == THEME_IDS)
+    for it in d["items"]:
+        shape("themes.item", it, {"id": S, "label": S, "events": isint, "active_events": isint, "edits_24h": isint,
+                                  "articles": isint, "trend": N24, "top_events": L})
+        check("themes.top_events <= 3", len(it["top_events"]) <= 3)
+        check("themes.edits_24h == sum(trend)", it["edits_24h"] == sum(it["trend"]))
+        for e in it["top_events"]:
+            shape("themes.top_event", e, ev_spec)
+
+c, d = timed("themes/timeline", "/api/themes/timeline?hours=24")
+check("themes/timeline 200", c == 200)
+if c == 200:
+    shape("themes/timeline", d, {"hours": isint, "bucket_seconds": isint, "themes": L, "items": L})
+    check("timeline 24 items", len(d["items"]) == 24)
+    check("timeline keys", all(set(i) == {"t", "non_classe", *THEME_IDS} for i in d["items"]))
+for bad_h in (0, 169, "x"):
+    c, dd, *_ = get(f"/api/themes/timeline?hours={bad_h}")
+    check(f"timeline hours={bad_h} -> 400", c == 400, str(c))
+
+c, d = timed("themes/classification", "/api/themes/classification")
+check("classification 200", c == 200)
+if c == 200:
+    shape("classification", d, {"total_articles": isint, "candidates": isint, "by_theme": L, "by_source": L,
+                                "by_lang": L, "with_qid": isint, "with_thumbnail": isint,
+                                "last_enriched_at": (iso, True)})
+    check("classification by_theme 10", [i["id"] for i in d["by_theme"]] == THEME_IDS)
+    check("classification sum by_theme == total", sum(i["count"] for i in d["by_theme"]) == d["total_articles"])
+
+for tid in THEME_IDS:
+    c, d = timed("themes/" + tid, "/api/themes/" + tid)
+    check(f"themes/{tid} 200", c == 200)
+    if c == 200:
+        shape("theme_detail", d, {"id": S, "label": S, "ref_time": iso, "events": L, "top_articles": L,
+                                  "timeline": L, "counts": lambda v: isinstance(v, dict)})
+        check("theme timeline 24", len(d["timeline"]) == 24)
+        check("theme top_articles <= 20", len(d["top_articles"]) <= 20)
+        for e in d["events"]:
+            shape("theme.event", e, ev_spec)
+c, dd, *_ = get("/api/themes/nope")
+check("themes/nope -> 400", c == 400, str(c))
+
+c, d = timed("events", "/api/events?limit=100")
+check("events 200", c == 200)
+shape("events", d, {"count": isint, "items": L})
+for e in (d or {}).get("items", []):
+    shape("events.item", e, ev_spec)
+for q in ("status=bad", "kind=bad", "sort=bad", "theme=bad", "limit=0"):
+    c, dd, *_ = get("/api/events?" + q)
+    check(f"events?{q} -> 400", c == 400, str(c))
+for q in ("sort=significance", "sort=peak", "lead=true", "status=en%20cours", "status=historique", "kind=detected"):
+    c, dd, *_ = get("/api/events?" + q)
+    check(f"events?{q} -> 200", c == 200, str(c))
+c, dd, *_ = get("/api/events/does-not-exist")
+check("events/unknown -> 404", c == 404, str(c))
+if d and d["items"]:
+    c, dd = timed("events/id", "/api/events/" + d["items"][0]["id"])
+    check("event detail 200", c == 200)
+    shape("event_detail", dd, {"event": lambda v: isinstance(v, dict), "bucket_seconds": isint, "timeline": L,
+                               "texts": L, "pageviews": L, "alerts": L, "editors_top": L})
+    shape("event_detail.event", dd["event"], {**ev_spec, "articles": L, "wikidata_url": (S, True), "links": L,
+                                              "peak_views": (isnum, True), "total_views": (isnum, True)})
+
+c, d = timed("frontpage", "/api/frontpage")
+check("frontpage 200", c == 200)
+shape("frontpage", d, {"ref_time": iso, "lead": (lambda v: isinstance(v, dict), True),
+                       "lead_reason": (lambda v: v in ("48h", "7j", "archives"), True), "sections": L})
+if c == 200:
+    check("frontpage 10 sections", [s["id"] for s in d["sections"]] == THEME_IDS)
+    check("frontpage sections <= 4", all(len(s["events"]) <= 4 for s in d["sections"]))
+
+# theme/theme_label on the old list endpoints
+for path in ("/api/radar", "/api/alerts?limit=20", "/api/edits/recent?limit=20", "/api/edits/top?limit=20"):
+    c, d, *_ = get(path)
+    its = (d or {}).get("items", [])
+    check(f"{path} theme fields", c == 200 and all("theme" in i and "theme_label" in i for i in its))
+c, d, *_ = get("/api/search?q=football&limit=5")
+check("search theme fields", c == 200 and all("theme" in i and "theme_label" in i for i in d["items"]))
+c, d, *_ = get("/api/search?q=football&theme=sport&limit=5")
+check("search theme=sport 200", c == 200 and all(i["theme"] == "sport" for i in d["items"]))
+c, d, *_ = get("/api/search?q=football&theme=bad")
+check("search theme=bad -> 400", c == 400)
+for col in ("articles", "events", "wikidata_entities"):
+    c, d, *_ = get(f"/api/explorer/{col}?limit=3")
+    check(f"explorer/{col} 200", c == 200 and d["collection"] == col, str(c))
+
 print("== misc")
 for p in ["/api/unknown", "/api", "/api/", "/api/edits", "/api/edits/", "/api/articles", "/docs", "/openapi.json", "/"]:
     c, dd, _, _ = get(p)

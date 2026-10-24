@@ -29,3 +29,5 @@ async def coll_stats(name: str) -> dict:
         "storage_bytes": int(s.get("storageSize", 0)),
         "index_bytes": int(s.get("totalIndexSize", 0)),
     }
+
+EVENT_ACTIVE_HOURS = int(os.getenv("EVENT_ACTIVE_HOURS", "2"))
