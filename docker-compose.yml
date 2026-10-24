@@ -70,6 +70,10 @@ services:
     <<: *ingestion
     command: ["python", "-m", "radar_ingest.detector"]
 
+  enricher:
+    <<: *ingestion
+    command: ["python", "-m", "radar_ingest.enricher"]
+
   pageviews-loader:
     <<: *ingestion
     profiles: ["batch"]

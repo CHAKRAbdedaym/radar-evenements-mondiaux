@@ -1,0 +1,472 @@
+# themes_mapping.yaml - how an article gets its theme (docs/CONTRACT.md section 4a and 6).
+#
+# Evidence order (first one that answers wins):
+#   1. human (P31 = Q5): died <= 30 days before the reference time -> personnalites;
+#      else first P106 occupation found in `occupations` below; else personnalites ("humain sans metier connu")
+#   2. P31 (instance of) found in `wikidata`
+#   3. P31 found in `meta` (lists, disambiguation pages...) -> "autres" on purpose, source "inconnu"
+#   4. P279 (subclass of), ONE level up, of a P31 found in `wikidata`
+#   5. `keywords.<theme>.categories` matched on the Wikipedia categories of the article
+#   6. `keywords.<theme>.texts` matched on title + edit comments + added texts (>= 2 hits)
+#   7. otherwise "autres" with theme_source "inconnu". Nothing is guessed silently: every answer carries a reason.
+#
+# Every QID below was checked against the Wikidata API (wbgetentities); the comment after '#' is its
+# English label. Re-check at any time with:  python -m radar_ingest.themes --verify
+# Theme ids: catastrophes conflits politique sport personnalites culture science economie sante
+
+version: 1
+
+# ---------------------------------------------------------------- P31 / P279 classes
+wikidata:
+  # ---- catastrophes: natural and man-made disasters, accidents
+  Q7944: catastrophes          # earthquake
+  Q8068: catastrophes          # flood
+  Q169950: catastrophes        # wildfire
+  Q107434304: catastrophes     # forest fire
+  Q8092: catastrophes          # tropical cyclone
+  Q140588: catastrophes        # typhoon
+  Q34439356: catastrophes      # hurricane
+  Q8081: catastrophes          # tornado
+  Q8070: catastrophes          # tsunami
+  Q167903: catastrophes        # landslide
+  Q7935: catastrophes          # avalanche
+  Q7692360: catastrophes       # volcanic eruption
+  Q43059: catastrophes         # drought
+  Q215864: catastrophes        # heat wave
+  Q75079023: catastrophes      # winter storm
+  Q744913: catastrophes        # aviation accident
+  Q3149875: catastrophes       # aviation incident
+  Q1078765: catastrophes       # railway accident
+  Q19403959: catastrophes      # railway accident by collision
+  Q852190: catastrophes        # shipwreck
+  Q3839081: catastrophes       # disaster
+  Q8065: catastrophes          # natural disaster
+  Q68800046: catastrophes      # industrial disaster
+  Q1309431: catastrophes       # structural failure
+  Q106673346: catastrophes     # crowd crush
+  Q171558: catastrophes        # accident
+  Q9687: catastrophes          # traffic collision
+  Q179057: catastrophes        # explosion
+  Q7625093: catastrophes       # structure fire
+  Q1550225: catastrophes       # mining accident
+  Q168247: catastrophes        # famine
+  Q1620824: catastrophes       # nuclear accident
+  Q220187: catastrophes        # oil spill
+
+  # ---- conflits: wars, attacks, security
+  Q198: conflits               # war
+  Q178561: conflits            # battle
+  Q645883: conflits            # military operation
+  Q350604: conflits            # armed conflict
+  Q8465: conflits              # civil war
+  Q3199915: conflits           # massacre
+  Q21480300: conflits          # mass shooting
+  Q2223653: conflits           # terrorist attack
+  Q217327: conflits            # suicide attack
+  Q891854: conflits            # bomb attack
+  Q1371150: conflits           # hostage taking
+  Q45382: conflits             # coup d'état
+  Q188055: conflits            # siege
+  Q2380335: conflits           # airstrike
+  Q831663: conflits            # military campaign
+  Q678146: conflits            # bombardment
+  Q111034471: conflits         # missile strike
+
+  # ---- politique: elections, institutions, parties
+  Q40231: politique            # public election
+  Q858439: politique           # presidential election
+  Q47566: politique            # United States presidential election
+  Q2618461: politique          # legislative election
+  Q1076105: politique          # general election
+  Q43109: politique            # referendum
+  Q7278: politique             # political party
+  Q11204: politique            # legislature
+  Q35749: politique            # parliament
+  Q7188: politique             # government
+  Q640506: politique           # cabinet
+  Q327333: politique           # government agency
+  Q192350: politique           # ministry
+  Q294414: politique           # public office
+  Q48352: politique            # head of state
+  Q2285706: politique          # head of government
+  Q12909644: politique         # political ideology
+  Q2738074: politique          # political movement
+  Q7210356: politique          # political organization
+  Q6138528: politique          # political coalition
+  Q245065: politique           # intergovernmental organization
+  Q3002772: politique          # political crisis
+  Q934744: politique           # political scandal
+  Q7755: politique             # constitution
+  Q820655: politique           # statute
+  Q131569: politique           # treaty
+  Q192611: politique           # electoral unit
+  Q273120: politique           # protest
+
+  # ---- sport
+  Q12166442: sport             # association football match
+  Q6979593: sport              # national association football team
+  Q1194951: sport              # national sports team
+  Q15991303: sport             # association football league
+  Q1478437: sport              # association football competition
+  Q623109: sport               # sports league
+  Q167170: sport               # multi-sport event
+  Q500834: sport               # tournament
+  Q13219666: sport             # tennis tournament
+  Q15091377: sport             # cycling race
+  Q27889498: sport             # boxing match
+  Q18536800: sport             # mixed martial arts event
+  Q17317604: sport             # professional wrestling event
+  Q27020041: sport             # sports season
+  Q1539532: sport              # sports season of a sports club
+  Q108861375: sport            # Formula One season
+  Q47459169: sport             # tennis match
+  Q11783626: sport             # athletics meeting
+  Q13406554: sport             # sports competition
+  Q18608583: sport             # recurring sporting event
+  Q16510064: sport             # sporting event
+  Q5389: sport                 # Olympic Games
+  Q159821: sport               # Summer Olympic Games
+  Q82414: sport                # Winter Olympic Games
+  Q73633: sport                # Paralympic Games
+  Q2485448: sport              # sports governing body
+  Q4438121: sport              # sports organization
+  Q847017: sport               # sports club
+  Q476028: sport               # association football club
+  Q12973014: sport             # sports team
+  Q13393265: sport             # basketball team
+  Q14645593: sport             # rugby union team
+  Q17376093: sport             # cricket team
+  Q483110: sport               # stadium
+  Q349: sport                  # sport
+
+  # ---- culture & medias
+  Q11424: culture              # film
+  Q202866: culture             # animated film
+  Q24862: culture              # short film
+  Q93204: culture              # documentary film
+  Q506240: culture             # television film
+  Q5398426: culture            # television series
+  Q3464665: culture            # television series season
+  Q21191270: culture           # television series episode
+  Q1983062: culture            # episode
+  Q526877: culture             # web series
+  Q1259759: culture            # miniseries
+  Q1261214: culture            # television special
+  Q15416: culture              # television program
+  Q1555508: culture            # radio program
+  Q1107: culture               # anime
+  Q8274: culture               # manga
+  Q21198342: culture           # manga series
+  Q1004: culture               # comic
+  Q14406742: culture           # comic book series
+  Q7725634: culture            # literary work
+  Q8261: culture               # novel
+  Q571: culture                # book
+  Q49084: culture              # short story
+  Q25379: culture              # play
+  Q5185279: culture            # poem
+  Q482994: culture             # album
+  Q208569: culture             # studio album
+  Q169930: culture             # extended play
+  Q134556: culture             # single
+  Q7366: culture               # song
+  Q105543609: culture          # musical work/composition
+  Q215380: culture             # musical group
+  Q2088357: culture            # musical ensemble
+  Q216337: culture             # boy band
+  Q7889: culture               # video game
+  Q7058673: culture            # video game series
+  Q4504495: culture            # award ceremony
+  Q115915900: culture          # film award ceremony
+  Q618779: culture             # award
+  Q132241: culture             # festival
+  Q220505: culture             # film festival
+  Q868557: culture             # music festival
+  Q33506: culture              # museum
+  Q838948: culture             # work of art
+  Q3305213: culture            # painting
+  Q860861: culture             # sculpture
+  Q1002697: culture            # periodical
+  Q41298: culture              # magazine
+  Q11032: culture              # newspaper
+  Q35127: culture              # website
+  Q15265344: culture           # broadcaster
+  Q1616075: culture            # television station
+  Q2001305: culture            # television channel
+  Q20899: culture              # podcast
+  Q95074: culture              # character
+  Q15632617: culture           # fictional human
+  Q15773347: culture           # film character
+  Q18127: culture              # record label
+
+  # ---- science & technology
+  Q7397: science               # software
+  Q9143: science               # programming language
+  Q9135: science               # operating system
+  Q620615: science             # mobile app
+  Q68: science                 # computer
+  Q8076: science               # video game console
+  Q8366: science               # algorithm
+  Q235557: science             # file format
+  Q40218: science              # spacecraft
+  Q26540: science              # artificial satellite
+  Q41291: science              # rocket
+  Q11862829: science           # academic discipline
+  Q336: science                # science
+  Q395: science                # mathematics
+  Q413: science                # physics
+  Q21198: science              # computer science
+  Q9418: science               # psychology
+  Q65943: science              # theorem
+  Q246672: science             # mathematical object
+  Q11344: science              # chemical element
+  Q11173: science              # chemical compound
+  Q7946: science               # mineral
+  Q8054: science               # protein
+  Q7187: science               # gene
+  Q16521: science              # taxon
+  Q3863: science               # asteroid
+  Q634: science                # planet
+  Q523: science                # star
+  Q318: science                # galaxy
+  Q3559: science               # comet
+  Q44559: science              # exoplanet
+  Q2537: science               # natural satellite
+  Q6999: science               # astronomical object
+  Q5633421: science            # scientific journal
+  Q737498: science             # academic journal
+  Q31855: science              # research institute
+
+  # ---- economie & entreprises
+  Q783794: economie            # company
+  Q4830453: economie           # business
+  Q6881511: economie           # enterprise
+  Q891723: economie            # public company
+  Q219577: economie            # holding company
+  Q658255: economie            # subsidiary company
+  Q778575: economie            # conglomerate
+  Q22687: economie             # bank
+  Q11691: economie             # stock exchange
+  Q431289: economie            # brand
+  Q13479982: economie          # cryptocurrency
+  Q8142: economie              # currency
+  Q178790: economie            # labor union
+  Q46970: economie             # airline
+  Q786820: economie            # automobile manufacturer
+  Q18043413: economie          # supermarket chain
+  Q18534542: economie          # restaurant chain
+
+  # ---- sante
+  Q12136: sante                # disease
+  Q18123741: sante             # infectious disease
+  Q44512: sante                # epidemic
+  Q12184: sante                # pandemic
+  Q3241045: sante              # disease outbreak
+  Q12078: sante                # cancer
+  Q929833: sante               # rare disease
+  Q179630: sante               # syndrome
+  Q12135: sante                # mental disorder
+  Q169872: sante               # symptom
+  Q134808: sante               # vaccine
+  Q12140: sante                # medication
+  Q16917: sante                # hospital
+  Q930752: sante               # medical specialty
+  Q796194: sante               # medical procedure
+  Q31207: sante                # health care
+  Q11190: sante                # medicine
+  Q808: sante                  # virus
+
+# ---------------------------------------------------------------- P106 occupations (humans)
+occupations:
+  # ---- sport
+  Q937857: sport               # association football player
+  Q3665646: sport              # basketball player
+  Q10833314: sport             # tennis player
+  Q2066131: sport              # athlete
+  Q2309784: sport              # sport cyclist
+  Q11513337: sport             # athletics competitor
+  Q11338576: sport             # boxer
+  Q10873124: sport             # chess player
+  Q10843402: sport             # swimmer
+  Q378622: sport               # racing driver
+  Q13141064: sport             # badminton player
+  Q12299841: sport             # cricketer
+  Q10871364: sport             # baseball player
+  Q11774891: sport             # ice hockey player
+  Q11303721: sport             # golfer
+  Q13474373: sport             # professional wrestler
+  Q11607585: sport             # mixed martial arts fighter
+  Q16947675: sport             # gymnast
+  Q13381572: sport             # artistic gymnast
+  Q17486376: sport             # sport shooter
+  Q4009406: sport              # sprinter
+  Q628099: sport               # association football coach
+  Q41583: sport                # coach
+  Q14089670: sport             # rugby union player
+  Q19204627: sport             # American football player
+  Q12840545: sport             # handball player
+  Q15117302: sport             # volleyball player
+  Q13382576: sport             # rower
+  # ---- culture
+  Q33999: culture              # actor
+  Q10800557: culture           # film actor
+  Q10798782: culture           # television actor
+  Q2259451: culture            # stage actor
+  Q2405480: culture            # voice actor
+  Q177220: culture             # singer
+  Q639669: culture             # musician
+  Q36834: culture              # composer
+  Q753110: culture             # songwriter
+  Q488205: culture             # singer-songwriter
+  Q2252262: culture            # rapper
+  Q183945: culture             # record producer
+  Q2526255: culture            # film director
+  Q3282637: culture            # film producer
+  Q28389: culture              # screenwriter
+  Q36180: culture              # writer
+  Q6625963: culture            # novelist
+  Q49757: culture              # poet
+  Q1028181: culture            # painter
+  Q483501: culture             # artist
+  Q33231: culture              # photographer
+  Q245068: culture             # comedian
+  Q5716684: culture            # dancer
+  Q1930187: culture            # journalist
+  Q947873: culture             # television presenter
+  Q2516866: culture            # publisher
+  Q4610556: culture            # model
+  Q42973: culture              # architect
+  # ---- politique
+  Q82955: politique            # politician
+  Q193391: politique           # diplomat
+  Q372436: politique           # statesperson
+  Q15253558: politique         # activist
+  Q15627169: politique         # trade unionist
+  # ---- science
+  Q901: science                # scientist
+  Q169470: science             # physicist
+  Q593644: science             # chemist
+  Q170790: science             # mathematician
+  Q864503: science             # biologist
+  Q11063: science              # astronomer
+  Q81096: science              # engineer
+  Q82594: science             # computer scientist
+  Q205375: science             # inventor
+  Q11631: science              # astronaut
+  Q1650915: science            # researcher
+  Q1622272: science            # university teacher
+  # ---- economie
+  Q484876: economie            # chief executive officer
+  Q43845: economie             # businessperson
+  Q131524: economie            # entrepreneur
+  Q188094: economie            # economist
+  Q806798: economie            # banker
+  # ---- sante
+  Q39631: sante                # physician
+  # ---- conflits & securite
+  Q189290: conflits            # military officer
+  Q4991371: conflits           # soldier
+  Q1402561: conflits           # military leader
+  Q2159907: conflits           # criminal
+  Q384593: conflits            # police officer
+
+# ---------------------------------------------------------------- meta pages
+# Pages that are not a topic: they honestly stay "autres" (theme_source "inconnu"), with this reason.
+meta:
+  Q13406463: page de liste     # Wikimedia list article
+  Q4167410: page d'homonymie   # Wikimedia disambiguation page
+  Q22808320: page d'homonymie  # Wikimedia human name disambiguation page
+  Q100775361: page de liste    # Wikimedia list of musical works by composer
+  Q4167836: page de catégorie  # Wikimedia category
+  Q11266439: modèle Wikimédia  # Wikimedia template
+
+# ---------------------------------------------------------------- keyword fallbacks
+# Used only when Wikidata gives nothing. Latin words match as whole words (plural s/es/x allowed);
+# Arabic words match with optional prefix particles. Matching is case-insensitive.
+# `categories`: matched on the Wikipedia category names (curated, fairly reliable, confidence 0.6).
+# `texts`: matched on title + edit comments + added text (weak evidence, confidence 0.4, needs >= 2 hits;
+# a hit in the title counts double), so only SPECIFIC words belong here. Generic words (technology,
+# university, series, campaign...) were removed after checking real matches: a wrong theme is worse
+# than "autres".
+keywords:
+  catastrophes:
+    categories:
+      en: [earthquake, flood, wildfire, tsunami, hurricane, typhoon, cyclone, tornado, landslide, "volcanic eruption", "plane crash", "air crash", "aviation accident", "railway accident", "train crash", shipwreck, "natural disaster", disaster, "building collapse", "mining accident", "road accident", "oil spill", famine, drought, "heat wave", stampede]
+      fr: [séisme, "tremblement de terre", inondation, "feu de forêt", incendie, tsunami, ouragan, typhon, cyclone, tornade, "glissement de terrain", "éruption volcanique", "accident aérien", "accident ferroviaire", naufrage, "catastrophe naturelle", catastrophe, effondrement, "accident minier", "accident de la route", "marée noire", famine, sécheresse, canicule]
+      ar: [زلزال, فيضان, "حرائق الغابات", تسونامي, إعصار, "ثوران بركان", "حادث طيران", "تحطم طائرة", "حادث قطار", غرق, كارثة, كوارث, مجاعة, جفاف, "موجة حر"]
+    texts:
+      en: [earthquake, tsunami, "death toll", wildfire, hurricane, typhoon, flooding, landslide, "plane crash", rescuers]
+      fr: [séisme, "tremblement de terre", tsunami, "feux de forêt", ouragan, typhon, inondations, rescapés, secouristes]
+      ar: [زلزال, تسونامي, "حصيلة الضحايا", "حرائق الغابات", إعصار, فيضانات, "تحطم طائرة"]
+  conflits:
+    categories:
+      en: [war, battle, "military operation", massacre, "terrorist attack", terrorism, "mass shooting", "armed conflict", insurgency, "civil war", genocide, siege, airstrike, "military conflict", "coup d'état", "war crime", "armed forces", army, navy, "air force", "intelligence agency", police, paramilitary, "military unit", "terrorist organization"]
+      fr: [guerre, bataille, "opération militaire", massacre, attentat, terrorisme, fusillade, "conflit armé", insurrection, "guerre civile", génocide, siège, "frappe aérienne", "coup d'État", "crime de guerre", "forces armées", armée, marine, "armée de l'air", "service de renseignement", police, "unité militaire", "organisation terroriste"]
+      ar: [حرب, معركة, "عملية عسكرية", مجزرة, "هجوم إرهابي", إرهاب, "إطلاق نار", "نزاع مسلح", تمرد, "حرب أهلية", إبادة, حصار, "غارة جوية", انقلاب, "جرائم حرب", "قوات مسلحة", جيش, شرطة, "منظمة إرهابية"]
+    texts:
+      en: [airstrike, ceasefire, shelling, invasion, "armed forces", troops, militants, hostages, "drone strike", missile]
+      fr: ["frappe aérienne", cessez-le-feu, bombardement, invasion, "forces armées", troupes, miliciens, otages, missile]
+      ar: ["غارة جوية", "وقف إطلاق النار", قصف, غزو, "القوات المسلحة", مسلحين, رهائن, صاروخ]
+  politique:
+    categories:
+      en: [election, elections, referendum, "political party", "political parties", politician, politicians, parliament, legislature, "prime minister", "presidents of", "government of", "ministers of", "political scandal", protest, "political ideology", constitution, diplomacy, "foreign relations", "heads of state", senators, mayors]
+      fr: [élection, élections, référendum, "parti politique", "partis politiques", "homme politique", "femme politique", "personnalité politique", parlement, député, sénateur, législature, "premier ministre", "président de", gouvernement, ministre, "scandale politique", manifestation, idéologie, constitution, diplomatie, "relations internationales", maire]
+      ar: [انتخابات, استفتاء, "حزب سياسي", "أحزاب سياسية", سياسي, برلمان, "مجلس النواب", "رئيس وزراء", رؤساء, حكومة, وزراء, "فضيحة سياسية", احتجاجات, دستور, دبلوماسية, "العلاقات الخارجية", عمدة]
+    texts:
+      en: [election, ballot, "prime minister", parliament, referendum, "political party"]
+      fr: [élection, scrutin, "premier ministre", parlement, référendum, "parti politique"]
+      ar: [انتخابات, اقتراع, "رئيس الوزراء", برلمان, استفتاء, "حزب سياسي"]
+  sport:
+    categories:
+      en: [football, "association football", basketball, tennis, cricket, rugby, baseball, "ice hockey", athletics, cycling, swimming, boxing, "mixed martial arts", wrestling, olympic, olympics, paralympic, "world cup", sports, sportspeople, footballers, league, championship, "grand prix", "formula one", tournament, athletes, golfers, "premier league", uefa, fifa, nba, nfl]
+      fr: [football, footballeur, basket-ball, basketteur, tennis, cricket, rugby, baseball, "hockey sur glace", athlétisme, cyclisme, natation, boxe, "arts martiaux mixtes", catch, olympique, olympiques, paralympique, "coupe du monde", sport, sportif, championnat, "grand prix", "formule 1", tournoi, athlète, golfeur, "ligue 1", uefa, fifa, nba, "club de football"]
+      ar: ["كرة القدم", لاعب, لاعبو, "كرة السلة", تنس, كريكت, رجبي, بيسبول, "ألعاب القوى", "سباق الدراجات", سباحة, ملاكمة, "الألعاب الأولمبية", "كأس العالم", رياضة, رياضيون, دوري, بطولة, "جائزة كبرى", الفيفا]
+    texts:
+      en: [championship, tournament, playoffs, "grand slam", "world cup", "premier league", "transfer window"]
+      fr: [championnat, tournoi, play-offs, "coupe du monde", "ligue 1", "mercato"]
+      ar: [بطولة, "كأس العالم", "الدوري الممتاز", "الدوري الإنجليزي"]
+  personnalites:
+    categories:
+      en: [births, "living people", deaths, "people from", "people educated", centenarians, nobility, royalty, monarchs, murdered, assassinated]
+      fr: ["naissance en", "décès en", "naissance à", "décès à", personnalité, centenaire, noblesse, monarque, assassiné, "mort assassiné", "mort en"]
+      ar: [مواليد, وفيات, أشخاص, "أشخاص على قيد الحياة", شخصيات, مئويون, "أسرة حاكمة", ملوك, اغتيالات]
+    texts:
+      en: [obituary, "died on", "passed away", funeral]
+      fr: [nécrologie, "est décédé", "est décédée", obsèques]
+      ar: [توفي, توفيت, جنازة, نعي]
+  culture:
+    categories:
+      en: [films, film, "television series", "tv series", albums, songs, singles, "video games", novels, books, music, bands, singers, actors, actresses, "musical groups", manga, anime, comics, award, awards, festivals, museums, television, radio, newspapers, magazines, websites, youtube, paintings, artists, writers, poets, composers, musicians, directors, "television seasons", episodes]
+      fr: [film, films, "série télévisée", "séries télévisées", album, albums, chanson, chansons, single, "jeu vidéo", "jeux vidéo", roman, romans, livre, livres, musique, groupe, chanteur, chanteuse, acteur, actrice, manga, anime, "bande dessinée", prix, récompense, festival, musée, télévision, radio, journal, magazine, "site web", peinture, artiste, écrivain, poète, compositeur, musicien, réalisateur, épisode, "saison de"]
+      ar: [أفلام, فيلم, مسلسلات, مسلسل, ألبومات, أغاني, أغنية, "ألعاب فيديو", روايات, كتب, موسيقى, فرق, مغنون, مغنيات, ممثلون, ممثلات, أنمي, مانغا, جوائز, مهرجانات, متاحف, تلفزيون, إذاعة, صحف, مجلات, لوحات, فنانون, كتاب, شعراء, ملحنون, مخرجون, حلقات]
+    texts:
+      en: [film, album, "box office", soundtrack, tracklist, episode]
+      fr: [film, album, box-office, "bande originale", épisode, "liste des titres"]
+      ar: [فيلم, ألبوم, "شباك التذاكر", "موسيقى تصويرية", حلقة]
+  science:
+    categories:
+      en: [software, "programming language", computers, "operating system", spacecraft, "space probe", satellite, astronomy, asteroid, planet, galaxy, physics, chemistry, mathematics, species, taxon, fossil, mineral, scientific, "academic journal", scientists, inventors, "artificial intelligence", smartphone]
+      fr: [logiciel, "langage de programmation", informatique, "système d'exploitation", "véhicule spatial", "sonde spatiale", satellite, astronomie, astéroïde, planète, galaxie, physique, chimie, mathématiques, espèce, taxon, fossile, minéral, scientifique, "revue scientifique", chercheur, inventeur, "intelligence artificielle", smartphone]
+      ar: [برمجيات, "لغة برمجة", حاسوب, "نظام تشغيل", "مركبة فضائية", مسبار, "قمر صناعي", فلك, كويكب, كوكب, مجرة, فيزياء, كيمياء, رياضيات, أحافير, معادن, علماء, مخترعون, "ذكاء اصطناعي"]
+    texts:
+      en: [software, algorithm, spacecraft, telescope, "open source"]
+      fr: [logiciel, algorithme, "véhicule spatial", télescope, "open source"]
+      ar: [برنامج, خوارزمية, "مركبة فضائية", تلسكوب]
+  economie:
+    categories:
+      en: [companies, company, "business", brands, banks, banking, "stock exchange", economy, economic, financial, finance, currency, cryptocurrency, airlines, "automobile manufacturers", supermarkets, multinational, conglomerates, corporations, "trade unions", manufacturers, billionaires, businesspeople, inflation, recession]
+      fr: [entreprise, entreprises, société, marque, marques, banque, bourse, économie, économique, financier, finance, monnaie, cryptomonnaie, "compagnie aérienne", "constructeur automobile", supermarché, multinationale, conglomérat, syndicat, milliardaire, "homme d'affaires", inflation, récession]
+      ar: [شركات, شركة, "علامات تجارية", بنوك, بنك, بورصة, اقتصاد, اقتصادي, مالي, عملة, "عملات رقمية", "خطوط جوية", "مصنعو السيارات", "متعددة الجنسيات", نقابات, مليارديرات, "رجال أعمال", تضخم, ركود]
+    texts:
+      en: ["stock market", bankruptcy, CEO, "quarterly results", inflation]
+      fr: ["marché boursier", faillite, PDG, "résultats trimestriels", inflation]
+      ar: ["سوق الأسهم", إفلاس, "الرئيس التنفيذي", تضخم]
+  sante:
+    categories:
+      en: [disease, diseases, epidemic, epidemics, pandemic, pandemics, outbreak, drugs, medication, pharmaceutical, hospital, hospitals, health, cancer, vaccine, vaccines, syndrome, symptom, infection, infections, virus, viruses, "mental disorder", surgery]
+      fr: [maladie, maladies, épidémie, épidémies, pandémie, pandémies, médicament, médicaments, pharmaceutique, hôpital, hôpitaux, santé, cancer, vaccin, vaccins, syndrome, symptôme, infection, infections, virus, "trouble mental", chirurgie]
+      ar: [أمراض, مرض, وباء, أوبئة, جائحة, تفشي, أدوية, دواء, صيدلة, مستشفيات, مستشفى, صحة, سرطان, لقاح, لقاحات, متلازمة, أعراض, عدوى, فيروسات, جراحة]
+    texts:
+      en: [patients, symptoms, vaccine, outbreak, diagnosis, pandemic]
+      fr: [patients, symptômes, vaccin, épidémie, diagnostic, pandémie]
+      ar: [مرضى, أعراض, لقاح, تفشي, تشخيص, جائحة]

@@ -3,7 +3,7 @@
 // Indexes follow docs/CONTRACT.md section 5 exactly.
 const radar = db.getSiblingDB("radar");
 
-const collections = ["edits", "edit_texts", "pageviews", "alerts", "scores", "ingestion_log"];
+const collections = ["edits", "edit_texts", "pageviews", "alerts", "scores", "ingestion_log", "articles", "wikidata_entities"];
 const existing = radar.getCollectionNames();
 collections.forEach((name) => {
   if (!existing.includes(name)) {
@@ -40,5 +40,15 @@ radar.scores.createIndex({ computed_at: 1 }, { expireAfterSeconds: 3600 });
 
 // 5.6 ingestion_log
 radar.ingestion_log.createIndex({ source: 1, hour: 1 });
+
+// 5.7 articles (v2, written by the enricher)
+radar.articles.createIndex({ theme: 1 });
+radar.articles.createIndex({ qid: 1 });
+radar.articles.createIndex({ theme_source: 1 });
+radar.articles.createIndex({ enriched_at: 1 });
+radar.articles.createIndex({ lang: 1, theme: 1 });
+
+// 5.8 wikidata_entities (v2, cache of Wikidata items)
+radar.wikidata_entities.createIndex({ fetched_at: 1 });
 
 print("[init] radar database initialised");
