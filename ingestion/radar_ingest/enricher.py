@@ -33,6 +33,7 @@ STATUS_ID = "enricher"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIPEDIA_API = "https://{lang}.wikipedia.org/w/api.php"
 SITES = "arwiki|frwiki|enwiki"
+P0_POLL_SECONDS = 15          # look for new alert / event articles this often (priority 0 fast path)
 REQUEUE_SECONDS = 60          # rebuild the queue at least this often (new alerts / edits arrive all the time)
 MAX_CONTINUE = 12             # follow Wikipedia `continue` at most this many times per batch
 MAX_CATEGORIES = 80           # categories kept per article
@@ -251,6 +252,8 @@ class Enricher:
         self.queue: list[dict[str, deque]] = [defaultdict(deque) for _ in range(5)]
         self.retry: dict[str, tuple[float, int]] = {}   # key -> (not before monotonic, attempts)
         self.stats = Counter()
+        self.processed: set[str] = set()   # keys enriched since the last queue rebuild (skip queued duplicates)
+        self.p0_seen: set[str] = set()     # keys already pushed by the priority-0 fast path
         self.ref_time: datetime | None = None
 
     # -- setup
@@ -323,6 +326,8 @@ class Enricher:
             add(4, lang, title, False)
 
         self.queue = [defaultdict(deque) for _ in range(5)]
+        self.processed.clear()
+        self.p0_seen.clear()
         seq = 0
         for prio, items in enumerate(queue):
             for lang, title in items:
@@ -369,6 +374,37 @@ class Enricher:
             return True
         return False
 
+    def refresh_p0(self):
+        """Fast path: alert / event articles that are not enriched yet go to the FRONT of priority 0,
+        without waiting for the next full queue rebuild (events get their qid and theme within a cycle)."""
+        db = self.db
+        pairs: list[tuple[str, str]] = []
+        for r in db["alerts"].aggregate([{"$group": {"_id": {"lang": "$lang", "title": "$title"}}}]):
+            pairs.append((r["_id"]["lang"], r["_id"]["title"]))
+        if "events" in db.list_collection_names():
+            for ev in db["events"].find({}, {"articles": 1, "titles": 1}):
+                pairs += [(a.get("lang"), a.get("title")) for a in ev.get("articles", [])]
+                pairs += [(lg, t) for lg, t in (ev.get("titles") or {}).items()]
+        pairs = [(lg, t) for lg, t in dict.fromkeys(pairs) if lg in LANGS and t and f"{lg}:{t}" not in self.p0_seen]
+        if not pairs:
+            return 0
+        known = set()
+        keys = [f"{lg}:{t}" for lg, t in pairs]
+        for i in range(0, len(keys), 500):
+            known.update(d["_id"] for d in self.articles.find({"_id": {"$in": keys[i:i + 500]}}, {"_id": 1}))
+        now_m = time.monotonic()
+        added = 0
+        for lg, t in pairs:
+            key = f"{lg}:{t}"
+            self.p0_seen.add(key)
+            if key in known or key in self.processed or self.retry.get(key, (0, 0))[0] > now_m:
+                continue
+            self.queue[0][lg].appendleft((-1, t))
+            added += 1
+        if added:
+            log.info("priority 0 fast path: %d alert/event article(s) queued first", added)
+        return added
+
     def queue_sizes(self) -> list[int]:
         return [sum(len(d) for d in q.values()) for q in self.queue]
 
@@ -383,7 +419,9 @@ class Enricher:
             for p in range(prio, 5):
                 d = self.queue[p].get(lang)
                 while d and len(titles) < self.batch_size:
-                    titles.append(d.popleft()[1])
+                    t = d.popleft()[1]
+                    if f"{lang}:{t}" not in self.processed:
+                        titles.append(t)
                 if len(titles) >= self.batch_size:
                     break
             return lang, titles
@@ -430,15 +468,16 @@ class Enricher:
                 comments.append(d["comment"])
         return comments, texts
 
-    def classify_article(self, *, lang, title, p31, p106, p570, parents, labels, categories) -> themes.Classification:
+    def classify_article(self, *, lang, title, p31, p106, p570, parents, labels, categories, qid) -> themes.Classification:
         res = themes.classify(self.mapping, lang=lang, title=title, p31=p31, p106=p106, p570=p570,
-                              ref_time=self.ref_time, parents=parents, labels=labels, categories=categories)
+                              ref_time=self.ref_time, parents=parents, labels=labels, categories=categories,
+                              has_qid=bool(qid))
         if res.reason == themes.NO_EVIDENCE:  # nothing yet: look at the latest edit comments / added texts
             comments, texts = self.recent_texts(lang, title)
             if comments or texts:
                 res = themes.classify(self.mapping, lang=lang, title=title, p31=p31, p106=p106, p570=p570,
                                       ref_time=self.ref_time, parents=parents, labels=labels,
-                                      categories=categories, comments=comments, texts=texts)
+                                      categories=categories, comments=comments, texts=texts, has_qid=bool(qid))
         return res
 
     # -- one batch
@@ -480,6 +519,7 @@ class Enricher:
             counts[doc["theme_source"]] += 1
             ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
             self.retry.pop(key, None)
+            self.processed.add(key)
         if ops:
             self.articles.bulk_write(ops, ordered=False)
         self.stats["enriched"] += len(ops)
@@ -511,7 +551,7 @@ class Enricher:
         p106 = (ent or {}).get("p106", [])[:MAX_OCCUPATIONS] if human else []
         p570 = (ent or {}).get("p570") if human else None
         res = self.classify_article(lang=lang, title=title, p31=p31, p106=p106, p570=p570, parents=parents,
-                                    labels=labels, categories=categories)
+                                    labels=labels, categories=categories, qid=qid)
         return {
             **base, "resolved_title": page.get("title"), "missing": False, "qid": qid,
             "description": page.get("description"),
@@ -539,12 +579,15 @@ class Enricher:
         self.api = Api(self.rate)
         self.ensure_indexes()
         log.info("enricher started: batch=%d rate<=%.1f/s refresh=%d d", self.batch_size, self.rate, self.refresh_days)
-        last_rebuild = 0.0
+        last_rebuild = last_p0 = 0.0
         while not STOP.is_set():
             try:
                 if time.monotonic() - last_rebuild > REQUEUE_SECONDS or not sum(self.queue_sizes()):
                     self.build_queue()
                     last_rebuild = time.monotonic()
+                if time.monotonic() - last_p0 > P0_POLL_SECONDS:
+                    self.refresh_p0()
+                    last_p0 = time.monotonic()
                 batch = self.next_batch()
                 if batch is None:
                     self.checkpoint()
@@ -604,7 +647,7 @@ class Enricher:
                 res = self.classify_article(
                     lang=d["lang"], title=d["title"], p31=[x["qid"] for x in d.get("instance_of", [])],
                     p106=[x["qid"] for x in d.get("occupations", [])], p570=d.get("death_date"),
-                    parents=parents, labels=lab, categories=d.get("categories", []))
+                    parents=parents, labels=lab, categories=d.get("categories", []), qid=d.get("qid"))
                 before[d.get("theme_source")] += 1
                 after[res.source] += 1
                 new = {"theme": res.theme, "theme_source": res.source, "theme_confidence": res.confidence,

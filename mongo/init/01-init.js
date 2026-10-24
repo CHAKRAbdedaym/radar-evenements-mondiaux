@@ -3,7 +3,7 @@
 // Indexes follow docs/CONTRACT.md section 5 exactly.
 const radar = db.getSiblingDB("radar");
 
-const collections = ["edits", "edit_texts", "pageviews", "alerts", "scores", "ingestion_log", "articles", "wikidata_entities"];
+const collections = ["edits", "edit_texts", "pageviews", "alerts", "scores", "ingestion_log", "articles", "wikidata_entities", "events"];
 const existing = radar.getCollectionNames();
 collections.forEach((name) => {
   if (!existing.includes(name)) {
@@ -34,6 +34,8 @@ radar.pageviews.createIndex({ hour: 1, views: -1 });
 radar.alerts.createIndex({ created_at: -1 });
 radar.alerts.createIndex({ lang: 1, title: 1, created_at: -1 });
 radar.alerts.createIndex({ z_score: -1 });
+radar.alerts.createIndex({ event_id: 1 });
+radar.alerts.createIndex({ window_end: -1 });
 
 // 5.5 scores (TTL 1 h)
 radar.scores.createIndex({ computed_at: 1 }, { expireAfterSeconds: 3600 });
@@ -50,5 +52,13 @@ radar.articles.createIndex({ lang: 1, theme: 1 });
 
 // 5.8 wikidata_entities (v2, cache of Wikidata items)
 radar.wikidata_entities.createIndex({ fetched_at: 1 });
+
+// 5.9 events (v2 / v2.1, maintained by the detector)
+radar.events.createIndex({ significance: -1 });
+radar.events.createIndex({ theme: 1, last_activity: -1 });
+radar.events.createIndex({ status: 1, last_activity: -1 });
+radar.events.createIndex({ key: 1, last_activity: -1 });
+radar.events.createIndex({ qid: 1 });
+radar.events.createIndex({ peak_z: -1 });
 
 print("[init] radar database initialised");

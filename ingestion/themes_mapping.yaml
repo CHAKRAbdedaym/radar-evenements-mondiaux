@@ -4,8 +4,9 @@
 #   1. human (P31 = Q5): died <= 30 days before the reference time -> personnalites;
 #      else first P106 occupation found in `occupations` below; else personnalites ("humain sans metier connu")
 #   2. P31 (instance of) found in `wikidata`
+#   2b. P31 found in `places` -> autres, source wikidata ("lieu géographique")
 #   3. P31 found in `meta` (lists, disambiguation pages...) -> "autres" on purpose, source "inconnu"
-#   4. P279 (subclass of), ONE level up, of a P31 found in `wikidata`
+#   4. P279 (subclass of), ONE level up, of a P31 found in `wikidata` (or `places`), except `generic_parents`
 #   5. `keywords.<theme>.categories` matched on the Wikipedia categories of the article
 #   6. `keywords.<theme>.texts` matched on title + edit comments + added texts (>= 2 hits)
 #   7. otherwise "autres" with theme_source "inconnu". Nothing is guessed silently: every answer carries a reason.
@@ -45,6 +46,7 @@ wikidata:
   Q1309431: catastrophes       # structural failure
   Q106673346: catastrophes     # crowd crush
   Q171558: catastrophes        # accident
+  Q109905701: catastrophes     # bousculade (crowd collapses and crushes)
   Q9687: catastrophes          # traffic collision
   Q179057: catastrophes        # explosion
   Q7625093: catastrophes       # structure fire
@@ -71,6 +73,10 @@ wikidata:
   Q831663: conflits            # military campaign
   Q678146: conflits            # bombardment
   Q111034471: conflits         # missile strike
+  Q124757: conflits            # riot
+  Q1520311: conflits           # violent crime
+  Q898712: conflits            # aircraft hijacking
+  Q17127659: conflits          # terrorist organization
 
   # ---- politique: elections, institutions, parties
   Q40231: politique            # public election
@@ -100,6 +106,7 @@ wikidata:
   Q820655: politique           # statute
   Q131569: politique           # treaty
   Q192611: politique           # electoral unit
+  Q47481352: politique         # Lok Sabha constituency
   Q273120: politique           # protest
 
   # ---- sport
@@ -379,6 +386,77 @@ meta:
   Q100775361: page de liste    # Wikimedia list of musical works by composer
   Q4167836: page de catégorie  # Wikimedia category
   Q11266439: modèle Wikimédia  # Wikimedia template
+
+# ---------------------------------------------------------------- places
+# Geographic places and administrative units: a real, honest classification -> theme "autres" with
+# theme_source "wikidata" and reason "lieu géographique (P31 ...)" (not "inconnu"). Also followed one P279 level up.
+places:
+  Q486972: lieu                 # établissement humain
+  Q515: lieu                    # ville
+  Q532: lieu                    # village
+  Q3957: lieu                   # petite ville
+  Q484170: lieu                 # commune française
+  Q1549591: lieu                # grande ville
+  Q51929311: lieu               # plus grande ville
+  Q1093829: lieu                # cité aux États-Unis
+  Q747074: lieu                 # commune d'Italie
+  Q494721: lieu                 # ville du Japon
+  Q15127012: lieu               # town
+  Q17343829: lieu               # communauté non incorporée
+  Q188509: lieu                 # banlieue
+  Q123705: lieu                 # quartier
+  Q62049: lieu                  # siège de comté
+  Q498162: lieu                 # localité de recensement aux États-Unis
+  Q56046844: lieu               # ancienne freguesia portugaise
+  Q2989398: lieu                # commune d'Algérie
+  Q56436498: lieu               # village en Inde
+  Q125366925: lieu              # village d'Égypte
+  Q110071217: lieu              # village of Illinois
+  Q16127605: lieu               # ville de Syrie
+  Q20202352: lieu               # localité du Mexique
+  Q116457956: lieu              # commune non-urbaine d'Allemagne
+  Q70208: lieu                  # commune de Suisse
+  Q1115575: lieu                # paroisse civile
+  Q12813115: lieu               # unité urbaine suédoise
+  Q2264924: lieu                # ville portuaire
+  Q3184121: lieu                # municipalité du Brésil
+  Q2039348: lieu                # commune des Pays-Bas
+  Q184188: lieu                 # canton français (avant 2015)
+  Q15284: lieu                  # municipalité
+  Q56061: lieu                  # entité territoriale administrative
+  Q6256: lieu                   # pays
+  Q3624078: lieu                # État souverain
+  Q112099: lieu                 # État insulaire
+  Q82794: lieu                  # zone géographique
+  Q4022: lieu                   # fleuve ou rivière
+  Q8502: lieu                   # montagne
+  Q46831: lieu                  # chaîne de montagnes
+  Q23397: lieu                  # lac
+  Q23442: lieu                  # île
+  Q75520: lieu                  # plateau
+  Q3024240: lieu                # État historique
+  Q928830: lieu                 # station de métro
+  Q22808403: lieu               # gare ou arrêt de transport en commun souterrain
+  Q22808404: lieu               # gare ou arrêt de transport en commun en surface
+  Q55488: lieu                  # gare ferroviaire
+  Q2175765: lieu                # station de tramway
+  Q839954: lieu                 # site archéologique
+  Q15661340: lieu               # ville antique
+  Q130003: lieu                 # station de sports d'hiver
+  Q174782: lieu                 # place
+  Q79007: lieu                  # rue
+  Q1530705: lieu                # comité de développement villageois
+
+# ---------------------------------------------------------------- generic parents
+# Valid as a direct P31 (above) but NOT reachable through P279: too generic, they produced wrong themes
+# (a French commune is a subclass of "electoral unit", a violent crime of "disaster", a hotel of "enterprise").
+generic_parents:
+  Q192611: trop générique      # electoral unit
+  Q3839081: trop générique     # disaster
+  Q6881511: trop générique     # enterprise
+  Q4830453: trop générique     # business
+  Q3149875: trop générique     # aviation incident
+  Q171558: trop générique      # accident
 
 # ---------------------------------------------------------------- keyword fallbacks
 # Used only when Wikidata gives nothing. Latin words match as whole words (plural s/es/x allowed);

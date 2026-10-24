@@ -7,9 +7,9 @@ data (`python -m radar_ingest.enricher --reclassify`). See docs/CONTRACT.md sect
 Order of evidence (first one that answers wins), always returning (theme, source, confidence, reason):
   a. human (P31 = Q5): died <= 30 days before ref_time -> personnalites (0.95);
      else first P106 found in the mapping (0.9; one P279 level up: 0.8); else personnalites (0.6)
-  b. P31 in the mapping (0.95)
+  b. P31 in the mapping (0.95); P31 in `places` -> autres / wikidata, "lieu géographique" (0.9)
   c. P31 flagged "meta" (list, disambiguation...) -> autres / inconnu, on purpose
-  d. P279 (one level up) of a P31 in the mapping (0.8)
+  d. P279 (one level up) of a P31 in the mapping, except `generic_parents` (0.8); same for `places`
   e. keywords on the Wikipedia categories (0.6)
   f. keywords on title + edit comments + added texts (0.4, needs >= 2 distinct hits)
   g. autres / inconnu (0.0)
@@ -91,6 +91,9 @@ class Mapping:
         self.wikidata: dict[str, str] = {}
         self.occupations: dict[str, str] = {}
         self.meta: dict[str, str] = {}
+        self.places: set[str] = {str(q) for q in (data.get("places") or {})}
+        # classes that are valid as a direct P31 but too generic to be reached through P279
+        self.generic_parents: set[str] = {str(q) for q in (data.get("generic_parents") or {})}
         for section, target in (("wikidata", self.wikidata), ("occupations", self.occupations)):
             for qid, theme in (data.get(section) or {}).items():
                 if theme not in THEME_LABELS or theme == "autres":
@@ -149,9 +152,15 @@ def _keyword_hits(rx, text: str) -> list[str]:
     return out
 
 
-def _classify_by_categories(mapping: Mapping, lang: str, categories) -> Classification | None:
+# Person keywords (births, deaths...) only make sense for humans or for pages without a Wikidata item.
+PERSON_THEME = "personnalites"
+
+
+def _classify_by_categories(mapping: Mapping, lang: str, categories, skip=()) -> Classification | None:
     best = None  # (score, -priority_index, theme, example_category, example_word)
     for theme in KEYWORD_PRIORITY:
+        if theme in skip:
+            continue
         rx = mapping.regex(theme, "categories", lang)
         if rx is None:
             continue
@@ -172,11 +181,13 @@ def _classify_by_categories(mapping: Mapping, lang: str, categories) -> Classifi
                           f"catégorie « {cat} » contient « {word} » ({score} catégorie(s)) → {theme}")
 
 
-def _classify_by_texts(mapping: Mapping, lang: str, title: str, comments, texts) -> Classification | None:
+def _classify_by_texts(mapping: Mapping, lang: str, title: str, comments, texts, skip=()) -> Classification | None:
     best = None
     blob_comments = "\n".join(c for c in comments if c)
     blob_texts = "\n".join(t[:4000] for t in texts if t)
     for theme in KEYWORD_PRIORITY:
+        if theme in skip:
+            continue
         rx = mapping.regex(theme, "texts", lang)
         if rx is None:
             continue
@@ -199,11 +210,13 @@ def _classify_by_texts(mapping: Mapping, lang: str, title: str, comments, texts)
 
 def classify(mapping: Mapping, *, lang: str, title: str = "", p31=(), p106=(), p570=None, ref_time=None,
              parents: dict | None = None, labels: dict | None = None,
-             categories=(), comments=(), texts=()) -> Classification:
+             categories=(), comments=(), texts=(), has_qid: bool | None = None) -> Classification:
     """Pure classification following docs/CONTRACT.md section 6 (see module docstring).
 
     p31 / p106: lists of QIDs in claim order. parents: {qid: [P279 QIDs]} for the P31 / P106 classes
     (only one level up is used). labels: {qid: label} to make the reason readable.
+    has_qid: False/True when known; an article WITH a Wikidata item that is not a human can never get
+    the person theme from keywords (None = unknown, keywords allowed).
     Always returns (theme, source, confidence, reason).
     """
     p31, p106 = list(p31 or ()), list(p106 or ())
@@ -240,16 +253,24 @@ def classify(mapping: Mapping, *, lang: str, title: str = "", p31=(), p106=(), p
                                   f"P31 {q}{lab(q)} : {mapping.meta[q]} (pas de thème propre) → autres")
 
     for q in p31:
+        if q in mapping.places:
+            return Classification("autres", SRC_WIKIDATA, 0.9, f"lieu géographique (P31 {q}{lab(q)}) → autres")
+
+    for q in p31:
         for parent in parents.get(q, ()):
-            if parent in mapping.wikidata:
+            if parent in mapping.wikidata and parent not in mapping.generic_parents:
                 theme = mapping.wikidata[parent]
                 return Classification(theme, SRC_WIKIDATA, 0.8,
                                       f"P31 {q}{lab(q)} → P279 {parent}{lab(parent)} → {theme}")
+            if parent in mapping.places:
+                return Classification("autres", SRC_WIKIDATA, 0.8,
+                                      f"lieu géographique (P31 {q}{lab(q)} → P279 {parent}{lab(parent)}) → autres")
 
-    res = _classify_by_categories(mapping, lang, categories or ())
+    skip = (PERSON_THEME,) if has_qid else ()
+    res = _classify_by_categories(mapping, lang, categories or (), skip)
     if res:
         return res
-    res = _classify_by_texts(mapping, lang, title or "", comments or (), texts or ())
+    res = _classify_by_texts(mapping, lang, title or "", comments or (), texts or (), skip)
     if res:
         return res
     return Classification("autres", SRC_UNKNOWN, 0.0, NO_EVIDENCE)

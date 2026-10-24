@@ -77,6 +77,30 @@ def main():
           "catastrophes", "mots-clés", 0.4)
     check("single weak text hit is not enough", themes.classify(M, lang="en", title="Something", comments=["fix typo, flood"]),
           "autres", "inconnu")
+    # F2 fixes: places, generic parents, person keywords
+    check("French commune -> lieu geographique (not politique)", themes.classify(M, lang="en", title="Boubiers", p31=["Q484170"]),
+          "autres", "wikidata", 0.9)
+    r = themes.classify(M, lang="en", title="Boubiers", p31=["Q484170"])
+    assert r.reason.startswith("lieu géographique"), r
+    check("place via P279 (village of Illinois-like class)", themes.classify(M, lang="en", title="x", p31=["Q999999996"],
+                                                                         parents={"Q999999996": ["Q532"]}),
+          "autres", "wikidata", 0.8)
+    check("electoral unit is not followed through P279", themes.classify(M, lang="en", title="x", p31=["Q999999995"],
+                                                                         parents={"Q999999995": ["Q192611"]}),
+          "autres", "inconnu")
+    check("disaster is not followed through P279", themes.classify(M, lang="en", title="Event X",
+                                                                   p31=["Q999999994"], parents={"Q999999994": ["Q3839081"]}),
+          "autres", "inconnu")
+    check("violent crime -> conflits", themes.classify(M, lang="en", title="2017 storming", p31=["Q1520311"]),
+          "conflits", "wikidata", 0.95)
+    check("direct electoral unit still politique", themes.classify(M, lang="en", title="Cuttack", p31=["Q192611"]),
+          "politique", "wikidata", 0.95)
+    check("births category ignored for an item that is not a human", themes.classify(M, lang="en", title="Sol Oriens", p31=["Q999999993"],
+                                                                                     categories=["2020 racehorse births"], has_qid=True),
+          "autres", "inconnu")
+    check("births category still works without a qid", themes.classify(M, lang="en", title="Some Person", p31=[],
+                                                                       categories=["1980 births"], has_qid=False),
+          "personnalites", "catégories")
     check("nothing known", themes.classify(M, lang="en", title="Zzzz", comments=["typo"]), "autres", "inconnu", 0.0)
     for res in (themes.classify(M, lang="fr", title="t"), themes.classify(M, lang="ar", title="t", p31=["Q7944"])):
         assert len(res) == 4 and res.reason, res

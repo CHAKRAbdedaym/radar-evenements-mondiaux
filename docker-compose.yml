@@ -69,6 +69,9 @@ services:
   detector:
     <<: *ingestion
     command: ["python", "-m", "radar_ingest.detector"]
+    environment:
+      EVENT_MERGE_HOURS: ${EVENT_MERGE_HOURS:-48}
+      EVENT_ACTIVE_HOURS: ${EVENT_ACTIVE_HOURS:-2}
 
   enricher:
     <<: *ingestion
@@ -86,6 +89,9 @@ services:
       context: ./backend
     image: radar-backend:latest
     env_file: .env
+    environment:
+      EVENT_MERGE_HOURS: ${EVENT_MERGE_HOURS:-48}
+      EVENT_ACTIVE_HOURS: ${EVENT_ACTIVE_HOURS:-2}
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:

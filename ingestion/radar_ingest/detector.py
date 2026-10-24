@@ -1,23 +1,56 @@
-"""detector: z-score of the last WINDOW_MINUTES of non-bot edits vs a per-article baseline.
+"""detector: z-score of the last WINDOW_MINUTES of non-bot edits vs a per-article baseline, then events.
 
 All aggregation is done by MongoDB ($group / $dateTrunc); Python only handles the small
 per-article result sets. See docs/CONTRACT.md section 6.
+
+Coverage-aware baseline: the history H only counts time actually covered by data. A gap is >= 15 min
+without ANY edit (bots included); H starts at the beginning of the current continuous segment, so a
+stream outage never produces a "24 h baseline" made of empty buckets.
+
+CLI:  python -m radar_ingest.detector                                  # the service loop
+      python -m radar_ingest.detector --backfill-alerts --start ISO --end ISO [--step-seconds 300]
 """
+import argparse
 import math
 import time
+from bisect import bisect_right
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from pymongo import InsertOne, UpdateOne
 from pymongo.errors import PyMongoError
 
 from . import common
+from .events import EventManager
 from .common import STOP, env_float, env_int, get_logger
 
 log = get_logger("detector")
 
 BUCKET = timedelta(minutes=5)
 STATUS_ID = "detector"
+GAP = timedelta(minutes=15)       # no edit at all for this long = a hole in the data
+WARMUP = timedelta(minutes=15)    # no scoring until this much covered history exists (a 0/0 baseline is junk)
+
+
+class Coverage:
+    """Continuous-coverage segments built from the minutes that contain at least one edit."""
+
+    def __init__(self, minutes: list):
+        self.minutes = minutes
+        self.seg_start = []
+        prev = None
+        for m in minutes:
+            if prev is None or m - prev >= GAP:
+                cur = m
+            self.seg_start.append(cur)
+            prev = m
+
+    def segment_start(self, t: datetime):
+        """Start of the continuous segment that contains instant `t`, or None if `t` is inside a gap."""
+        i = bisect_right(self.minutes, t) - 1
+        if i < 0 or t - self.minutes[i] >= GAP:
+            return None
+        return self.seg_start[i]
 
 
 class Detector:
@@ -31,6 +64,7 @@ class Detector:
         self.z_threshold = env_float("Z_THRESHOLD", 3)
         self.min_users = env_int("MIN_USERS", 3)
         self.cooldown = timedelta(minutes=env_int("ALERT_COOLDOWN_MINUTES", 15))
+        self.events = EventManager(self.db)
 
     # -- DB aggregations
     def window_stats(self, ws, we):
@@ -45,9 +79,12 @@ class Detector:
                 "edits": r["edits"], "distinct_users": len(r["users"]), "delta_bytes": r["delta"]}
         return out
 
-    def first_edit(self):
-        doc = self.edits.find_one({"bot": False}, {"timestamp": 1}, sort=[("timestamp", 1)])
-        return doc["timestamp"] if doc else None
+    def covered_minutes(self, start, end):
+        """Sorted minutes in [start, end] that contain at least one edit (bots included), index-only."""
+        pipeline = [{"$match": {"timestamp": {"$gte": start, "$lte": end}}},
+                    {"$group": {"_id": {"$dateTrunc": {"date": "$timestamp", "unit": "minute"}}}},
+                    {"$sort": {"_id": 1}}]
+        return [r["_id"] for r in self.edits.aggregate(pipeline, allowDiskUse=True)]
 
     def article_baselines(self, keys, start, n):
         """Per-article (sum, sum of squares) of 5-min bucket counts over n buckets before `start+n*5min`.
@@ -103,13 +140,60 @@ class Detector:
         var = sum(n * (c - mean) ** 2 for c, n in hist) / total
         return float(median), math.sqrt(var)
 
-    # -- one cycle
+    # -- scoring of one window (shared by the live loop and --backfill-alerts)
+    def evaluate(self, ws, we, seg_start, created_at, write_scores):
+        """Score [ws, we]. `seg_start` = start of the continuous coverage segment containing ws (or None).
+        Returns (scores_count, alerts_inserted, history_hours, baseline_type|None)."""
+        active = self.window_stats(ws, we)
+        horizon = ws - timedelta(hours=self.baseline_hours)
+        hist_start = max(horizon, seg_start) if seg_start else ws
+        history = max(ws - hist_start, timedelta(0))
+        h_hours = history.total_seconds() / 3600
+        if not active or history < WARMUP:
+            return 0, 0, h_hours, None
+        article_mode = h_hours >= self.min_history_hours
+        if article_mode:
+            n = int(history / BUCKET)
+            bstart = ws - n * BUCKET
+            sums = self.article_baselines(list(active), bstart, n)
+            btype = "article"
+        else:
+            med, pstd = self.provisional_baseline(hist_start, ws)
+            btype = "provisoire"
+        recent = {(a["lang"], a["title"]) for a in self.db["alerts"].find(
+            {"window_end": {"$gt": we - self.cooldown, "$lte": we}}, {"lang": 1, "title": 1})}
+        scores, alerts_docs = [], []
+        for (lang, title), st in active.items():
+            if btype == "article":
+                sm, s2 = sums.get((lang, title), (0, 0))
+                mean = sm / n
+                std = math.sqrt(max(s2 / n - mean * mean, 0.0))
+            else:
+                mean, std = med, pstd
+            z = (st["edits"] - mean) / max(std, 1.0)
+            if write_scores:
+                scores.append(UpdateOne({"_id": f"{lang}:{title}"}, {"$set": {
+                    "lang": lang, "title": title, "z_score": z, "edits": st["edits"],
+                    "distinct_users": st["distinct_users"], "baseline_mean": mean, "baseline_std": std,
+                    "baseline_type": btype, "computed_at": created_at}}, upsert=True))
+            if z > self.z_threshold and st["distinct_users"] >= self.min_users and (lang, title) not in recent:
+                alerts_docs.append(InsertOne({
+                    "lang": lang, "title": title, "window_start": ws, "window_end": we,
+                    "edits": st["edits"], "distinct_users": st["distinct_users"],
+                    "delta_bytes": st["delta_bytes"], "baseline_mean": mean, "baseline_std": std,
+                    "baseline_type": btype, "z_score": z, "created_at": created_at}))
+                log.info("ALERT %s:%s edits=%d users=%d z=%.1f (%s baseline mean=%.2f std=%.2f) window_end=%s",
+                         lang, title, st["edits"], st["distinct_users"], z, btype, mean, std, we.strftime("%m-%dT%H:%M"))
+        if scores:
+            self.db["scores"].bulk_write(scores, ordered=False)
+        if alerts_docs:
+            self.db["alerts"].bulk_write(alerts_docs, ordered=False)
+        return len(active), len(alerts_docs), h_hours, btype
+
+    # -- one live cycle
     def run_once(self):
         # EVENT TIME: the window ends at the newest edit timestamp (Wikimedia clock), never at the
-        # container wall clock (which may be skewed). Mirrors Spark event-time / watermark semantics.
-        # If the stream stalls or replays a backlog, ref barely moves: the cooldown is therefore also
-        # measured in event time (window_end), so one spike yields one alert whatever the wall clock
-        # does. created_at / computed_at stay processing time (wall clock).
+        # container wall clock (which may be skewed). The cooldown is measured in event time too.
         wall = common.utcnow()
         ref = common.latest_event_time(self.db)
         if ref is None:
@@ -117,70 +201,27 @@ class Detector:
             return
         now = ref.replace(microsecond=0)
         ws, we = now - self.window, now
-        active = self.window_stats(ws, we)
-        first = self.first_edit()
         horizon = ws - timedelta(hours=self.baseline_hours)
-        hist_start = max(horizon, first) if first else ws
-        history = max(ws - hist_start, timedelta(0))
-        h_hours = history.total_seconds() / 3600
-        article_mode = h_hours >= self.min_history_hours
-
-        scores, alerts_docs = [], []
-        if active:
-            if article_mode:
-                n = int(history / BUCKET)
-                bstart = ws - n * BUCKET
-                sums = self.article_baselines(list(active), bstart, n)
-                btype = "article"
-            else:
-                med, pstd = self.provisional_baseline(hist_start, ws)
-                btype = "provisoire"
-
-            recent = {(a["lang"], a["title"]) for a in self.db["alerts"].find(
-                {"window_end": {"$gt": we - self.cooldown}},
-                {"lang": 1, "title": 1})}
-
-            for (lang, title), s in active.items():
-                if btype == "article":
-                    sm, s2 = sums.get((lang, title), (0, 0))
-                    mean = sm / n
-                    std = math.sqrt(max(s2 / n - mean * mean, 0.0))
-                else:
-                    mean, std = med, pstd
-                z = (s["edits"] - mean) / max(std, 1.0)
-                base = {"lang": lang, "title": title, "z_score": z, "edits": s["edits"],
-                        "distinct_users": s["distinct_users"], "baseline_mean": mean,
-                        "baseline_std": std, "baseline_type": btype}
-                scores.append(UpdateOne({"_id": f"{lang}:{title}"},
-                                        {"$set": {**base, "computed_at": wall}}, upsert=True))
-                if z > self.z_threshold and s["distinct_users"] >= self.min_users \
-                        and (lang, title) not in recent:
-                    alerts_docs.append(InsertOne({
-                        "lang": lang, "title": title, "window_start": ws, "window_end": we,
-                        "edits": s["edits"], "distinct_users": s["distinct_users"],
-                        "delta_bytes": s["delta_bytes"], "baseline_mean": mean, "baseline_std": std,
-                        "baseline_type": btype, "z_score": z, "created_at": wall}))
-                    log.info("ALERT %s:%s edits=%d users=%d z=%.1f (%s baseline mean=%.2f std=%.2f)",
-                             lang, title, s["edits"], s["distinct_users"], z, btype, mean, std)
-            if scores:
-                self.db["scores"].bulk_write(scores, ordered=False)
-            if alerts_docs:
-                self.db["alerts"].bulk_write(alerts_docs, ordered=False)
-
+        cov = Coverage(self.covered_minutes(horizon, we))
+        seg = cov.segment_start(ws)
+        scored, n_alerts, h_hours, btype = self.evaluate(ws, we, seg, wall, True)
+        cov_start = max(horizon, seg) if seg else None
+        ev_info = self.events.cycle(now)
         common.log_upsert(self.db, STATUS_ID, {
-            "source": STATUS_ID, "last_run_at": wall, "ref_time": now, "articles_scored": len(scores),
-            "alerts_created": len(alerts_docs), "history_hours": round(h_hours, 3),
-            "baseline_type": "article" if article_mode else "provisoire",
-            "updated_at": wall})
-        log.info("cycle: ref(event time)=%s wall=%s window=[%s, %s] active=%d scored=%d alerts=%d history=%.2fh baseline=%s",
-                 now.strftime("%H:%M:%S"), wall.strftime("%H:%M:%S"),
-                 ws.strftime("%H:%M:%S"), we.strftime("%H:%M:%S"), len(active), len(scores),
-                 len(alerts_docs), h_hours, "article" if article_mode else "provisoire")
+            "source": STATUS_ID, "last_run_at": wall, "ref_time": now, "articles_scored": scored,
+            "alerts_created": n_alerts, "history_hours": round(h_hours, 3),
+            "baseline_type": btype or "aucune", "coverage_start": cov_start, "updated_at": wall,
+            **{f"events_{k}": v for k, v in ev_info.items()}})
+        log.info("cycle: ref(event time)=%s wall=%s window=[%s, %s] scored=%d alerts=%d coverage_start=%s history=%.2fh baseline=%s events=%s",
+                 now.strftime("%H:%M:%S"), wall.strftime("%H:%M:%S"), ws.strftime("%H:%M:%S"), we.strftime("%H:%M:%S"),
+                 scored, n_alerts, cov_start.strftime("%m-%dT%H:%M") if cov_start else "gap", h_hours,
+                 btype or "warmup", ev_info)
 
     def run(self):
         log.info("started: interval=%ds window=%s baseline=%sh min_history=%sh z>%s users>=%d cooldown=%s",
                  self.interval, self.window, self.baseline_hours, self.min_history_hours,
                  self.z_threshold, self.min_users, self.cooldown)
+        self.events.ensure_indexes()
         while not STOP.is_set():
             t0 = time.monotonic()
             try:
@@ -192,10 +233,52 @@ class Detector:
             STOP.wait(max(1.0, self.interval - (time.monotonic() - t0)))
         log.info("stopped")
 
+    # -- replay of the same rules over past windows
+    def backfill(self, start, end, step):
+        """Replay detection over every `step` window of stored edits in [start, end] (same z / users /
+        cooldown / coverage rules). Idempotent: the cooldown looks at alerts already stored, including
+        the ones from a previous run. Alerts get created_at = window_end (event time)."""
+        self.events.ensure_indexes()
+        cov = Coverage(self.covered_minutes(start - timedelta(hours=self.baseline_hours) - GAP, end))
+        we = start
+        windows = created = skipped = 0
+        t0 = time.monotonic()
+        while we <= end and not STOP.is_set():
+            ws = we - self.window
+            if cov.segment_start(we) is None:
+                skipped += 1
+            else:
+                _, n_alerts, _, _ = self.evaluate(ws, we, cov.segment_start(ws), we, False)
+                created += n_alerts
+                windows += 1
+            we += step
+        log.info("backfill done: %d windows replayed, %d in data gaps skipped, %d new alerts (%.0f s)",
+                 windows, skipped, created, time.monotonic() - t0)
+        return created
+
+
+def _parse_iso(raw: str) -> datetime:
+    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
 
 def main():
+    parser = argparse.ArgumentParser(description="detector: z-score alerts + events")
+    parser.add_argument("--backfill-alerts", action="store_true", help="replay detection over past windows and exit")
+    parser.add_argument("--start", help="ISO start (window end of the first replayed window)")
+    parser.add_argument("--end", help="ISO end (default: newest edit)")
+    parser.add_argument("--step-seconds", type=int, default=300, help="step between replayed windows (default 300)")
+    args = parser.parse_args()
     common.install_signal_handlers(log)
-    Detector().run()
+    det = Detector()
+    if args.backfill_alerts:
+        if not args.start:
+            parser.error("--backfill-alerts needs --start")
+        end = _parse_iso(args.end) if args.end else common.latest_event_time(det.db)
+        det.backfill(_parse_iso(args.start), end, timedelta(seconds=args.step_seconds))
+        det.events.cycle(end)  # attach the new alerts to events right away
+        return
+    det.run()
 
 
 if __name__ == "__main__":
