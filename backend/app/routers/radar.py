@@ -37,7 +37,8 @@ async def radar(lang: Optional[str] = None, include_bots: bool = False):
     keys = [f"{r['_id']['lang']}:{r['_id']['title']}" for r in rows]
     scores_f = db.scores.find({"_id": {"$in": keys}}, {"z_score": 1, "baseline_type": 1}).to_list(len(keys) or 1)
     alerts_f = db.alerts.find(
-        {"window_end": {"$gte": now - timedelta(minutes=ALERT_COOLDOWN_MINUTES)}}, {"lang": 1, "title": 1}
+        {"window_end": {"$gte": now - timedelta(minutes=ALERT_COOLDOWN_MINUTES)}, "invalid": {"$ne": True}},
+        {"lang": 1, "title": 1}
     ).to_list(1000)
     scores, alerts = await asyncio.gather(scores_f, alerts_f)
     score_by = {s["_id"]: s for s in scores}

@@ -70,7 +70,7 @@ async def stats():
         db.edits.aggregate(last_hour_p).to_list(5),
         db.edits.count_documents({"ingested_at": {"$gte": ingest_minute_ago}}),
         db.edits.aggregate(active_p).to_list(1),
-        db.alerts.count_documents({"window_end": {"$gte": hour_ago}}),
+        db.alerts.count_documents({"window_end": {"$gte": hour_ago}, "invalid": {"$ne": True}}),
         cache.get("first_edit", 60, lambda: _edge(1)),
         _edge(-1),
         db.ingestion_log.count_documents({"source": "pageviews", "status": "done"}),

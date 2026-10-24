@@ -166,7 +166,7 @@ async def event_detail(event_id: str):
             pass
     if oids:
         alert_filter = {"$or": [alert_filter, {"_id": {"$in": oids}}]}
-    alert_docs = await db.alerts.find(alert_filter).sort("created_at", -1).limit(50).to_list(50)
+    alert_docs = await db.alerts.find({"$and": [alert_filter, {"invalid": {"$ne": True}}]}).sort("created_at", -1).limit(50).to_list(50)
     alert_rows = [alert_item(d) for d in alert_docs]
     await annotate(alert_rows)
 

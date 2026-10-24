@@ -161,7 +161,8 @@ class Detector:
             med, pstd = self.provisional_baseline(hist_start, ws)
             btype = "provisoire"
         recent = {(a["lang"], a["title"]) for a in self.db["alerts"].find(
-            {"window_end": {"$gt": we - self.cooldown, "$lte": we}}, {"lang": 1, "title": 1})}
+            {"window_end": {"$gt": we - self.cooldown, "$lte": we}, "invalid": {"$ne": True}},
+            {"lang": 1, "title": 1})}
         scores, alerts_docs = [], []
         for (lang, title), st in active.items():
             if btype == "article":
@@ -257,6 +258,39 @@ class Detector:
         return created
 
 
+# One-off repair (see flag_invalid_alerts): window of the stream outage resume, before the coverage fix.
+BAD_FROM = datetime(2026, 10, 24, 22, 41, tzinfo=timezone.utc)   # first window after the 7-day hole (wall-clock note)
+BAD_TO = datetime(2026, 10, 25, 0, 44, tzinfo=timezone.utc)      # first cycle of the coverage-aware detector
+INVALID_REASON = ("calculée avec une baseline vide juste après un trou de 7 jours dans le flux "
+                  "(avant la correction de la couverture)")
+
+
+def flag_invalid_alerts(det: "Detector", apply: bool) -> list:
+    """Mark (never delete) alerts whose baseline was computed before the coverage fix on data that did not
+    exist: window_end in [BAD_FROM, BAD_TO] and either < WARMUP minutes of really covered history, or
+    baseline_type "article" with less real history than MIN_HISTORY_HOURS. Selected by rule, not by title.
+    Dry run unless `apply`; idempotent."""
+    horizon_pad = timedelta(hours=det.baseline_hours) + GAP
+    cov = Coverage(det.covered_minutes(BAD_FROM - horizon_pad, BAD_TO))
+    matched = []
+    for a in det.db["alerts"].find({"window_end": {"$gte": BAD_FROM, "$lte": BAD_TO}}).sort("window_end", 1):
+        ws = a["window_start"]
+        seg = cov.segment_start(ws)
+        real = max(ws - max(ws - timedelta(hours=det.baseline_hours), seg), timedelta(0)) if seg else timedelta(0)
+        too_short = real < WARMUP
+        fake_article = a.get("baseline_type") == "article" and real.total_seconds() / 3600 < det.min_history_hours
+        if too_short or fake_article:
+            matched.append(a)
+            print(f"MATCH {a['window_end'].strftime('%m-%dT%H:%M')} {a['lang']}:{a['title']} stored={a.get('baseline_type')} "
+                  f"mean={a.get('baseline_mean', 0):.2f} real_covered_history={real.total_seconds() / 60:.0f} min "
+                  f"already_invalid={bool(a.get('invalid'))}", flush=True)
+    if apply and matched:
+        res = det.db["alerts"].update_many({"_id": {"$in": [a["_id"] for a in matched]}},
+                                           {"$set": {"invalid": True, "invalid_reason": INVALID_REASON}})
+        log.info("flagged %d alert(s) invalid (%d newly modified)", len(matched), res.modified_count)
+    return matched
+
+
 def _parse_iso(raw: str) -> datetime:
     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -265,12 +299,21 @@ def _parse_iso(raw: str) -> datetime:
 def main():
     parser = argparse.ArgumentParser(description="detector: z-score alerts + events")
     parser.add_argument("--backfill-alerts", action="store_true", help="replay detection over past windows and exit")
+    parser.add_argument("--flag-invalid-alerts", action="store_true",
+                        help="one-off: list the alerts computed on an empty baseline after the 7-day hole; with --apply, flag them invalid")
+    parser.add_argument("--apply", action="store_true", help="write the flags (default: dry run)")
     parser.add_argument("--start", help="ISO start (window end of the first replayed window)")
     parser.add_argument("--end", help="ISO end (default: newest edit)")
     parser.add_argument("--step-seconds", type=int, default=300, help="step between replayed windows (default 300)")
     args = parser.parse_args()
     common.install_signal_handlers(log)
     det = Detector()
+    if args.flag_invalid_alerts:
+        matched = flag_invalid_alerts(det, args.apply)
+        print(f"{len(matched)} alert(s) matched; {'written' if args.apply else 'dry run, nothing written (add --apply)'}")
+        if args.apply:
+            det.events.cycle(common.latest_event_time(det.db))
+        return
     if args.backfill_alerts:
         if not args.start:
             parser.error("--backfill-alerts needs --start")

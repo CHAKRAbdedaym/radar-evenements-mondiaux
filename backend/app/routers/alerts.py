@@ -13,6 +13,8 @@ router = APIRouter(tags=["alerts"])
 async def alerts(limit: int = 50, lang: Optional[str] = None):
     lang = check_lang(lang)
     limit = clamp_limit(limit, 200)
-    flt = {"lang": lang} if lang else {}
+    flt = {"invalid": {"$ne": True}}  # alerts flagged invalid stay visible only in the raw explorer
+    if lang:
+        flt["lang"] = lang
     docs = await db.alerts.find(flt).sort("created_at", -1).limit(limit).to_list(limit)
     return {"items": await annotate([alert_item(d) for d in docs])}

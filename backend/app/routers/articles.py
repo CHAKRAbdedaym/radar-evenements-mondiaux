@@ -49,7 +49,7 @@ async def article(lang: str, title: str):
         db.edits.aggregate(timeline_p).to_list(None),
         db.edits.find(key).sort("timestamp", -1).limit(100).to_list(100),
         db.edit_texts.find(key).sort("timestamp", -1).limit(30).to_list(30),
-        db.alerts.find(key).sort("created_at", -1).limit(50).to_list(50),
+        db.alerts.find({**key, "invalid": {"$ne": True}}).sort("created_at", -1).limit(50).to_list(50),
         db.pageviews.count_documents(key),
         db.articles.find_one({"_id": f"{lang}:{title}"}),
         active_cut(),

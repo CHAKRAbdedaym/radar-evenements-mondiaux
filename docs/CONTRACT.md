@@ -177,6 +177,7 @@ Indexes: unique `{lang:1,title:1,hour:1}`, `{hour:1,views:-1}`.
 }
 ```
 Indexes: `{created_at:-1}`, `{lang:1,title:1,created_at:-1}`, `{z_score:-1}`, **(v2)** `{event_id:1}`, `{window_end:-1}`.
+**(v2.2)** Optional `"invalid": true` + `"invalid_reason": "…"` (French), set only by `detector --flag-invalid-alerts --apply` (alerts computed with an empty baseline right after the 7-day stream gap). An invalid alert is never deleted; it is excluded from the detector cooldown, from events, from `/api/alerts`, the radar alert flag, `active_alerts` and the article/event alert lists, and stays visible in `/api/explorer/alerts`. An event made only of invalid alerts is removed from `events`.
 **(v2)** The detector adds `"event_id": "<events._id>"` to each alert once it is attached to an event (backfill sets it on existing alerts; nothing else in alerts changes).
 
 ### 5.5 `scores` (latest detector score per active article — feeds the radar "z if known")

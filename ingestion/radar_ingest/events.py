@@ -75,7 +75,10 @@ class EventManager:
     def cycle(self, ref) -> dict:
         info = {"attached": 0, "created": 0, "merged": 0, "refreshed": 0}
         try:
+            purged, touched0 = self.purge_invalid()
+            info["purged"] = purged
             touched, attached, created = self.attach_alerts()
+            touched |= touched0
             info["attached"], info["created"] = attached, created
             merged, rekeyed = self.rekey(touched)
             info["merged"] = merged
@@ -90,6 +93,28 @@ class EventManager:
         info["total"] = self.db["events"].estimated_document_count()
         return info
 
+    # ------------------------------------------------- 0. alerts flagged invalid
+    def purge_invalid(self):
+        """Alerts flagged `invalid: true` never count. An event made only of invalid alerts is removed
+        (derived doc: the only other delete allowed); otherwise the invalid alerts are detached and the
+        event is recomputed without them. Their `event_id` is unset. Returns (events removed, touched ids)."""
+        db = self.db
+        by_event = defaultdict(list)
+        for a in db["alerts"].find({"invalid": True, "event_id": {"$exists": True}}, {"event_id": 1}):
+            by_event[a["event_id"]].append(a["_id"])
+        removed, touched = 0, set()
+        for eid, ids in by_event.items():
+            valid = db["alerts"].count_documents({"event_id": eid, "invalid": {"$ne": True}})
+            db["alerts"].update_many({"_id": {"$in": ids}}, {"$unset": {"event_id": ""}})
+            if valid == 0:
+                db["events"].delete_one({"_id": eid})
+                removed += 1
+                log.info("removed event %s: all its alerts are flagged invalid", eid)
+            else:
+                touched.add(eid)
+                log.info("event %s keeps %d valid alert(s), %d invalid detached", eid, valid, len(ids))
+        return removed, touched
+
     # --------------------------------------------------------------- 1. attach
     def article_qids(self, pairs) -> dict:
         keys = [f"{lang}:{title}" for lang, title in pairs]
@@ -100,7 +125,7 @@ class EventManager:
         return out
 
     def attach_alerts(self):
-        alerts = list(self.db["alerts"].find({"event_id": {"$exists": False}}).sort([("window_end", 1), ("_id", 1)]))
+        alerts = list(self.db["alerts"].find({"event_id": {"$exists": False}, "invalid": {"$ne": True}}).sort([("window_end", 1), ("_id", 1)]))
         if not alerts:
             return set(), 0, 0
         qids = self.article_qids({(a["lang"], a["title"]) for a in alerts})
