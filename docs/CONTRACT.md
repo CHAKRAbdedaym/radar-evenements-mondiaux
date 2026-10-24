@@ -1,7 +1,7 @@
 # CONTRACT — Radar d'événements mondiaux
 
 > Single source of truth for every subagent. Owned by the orchestrator. **Do not change it yourself**: report needed changes.
-> Version 2.0 (final phase: themes, `articles`, `events`, new endpoints, editorial redesign). Changes vs 1.2 are marked **(v2)**.
+> Version 2.1 (v2.1 = events.significance / lead_eligible + /api/frontpage). Version 2.0 (final phase: themes, `articles`, `events`, new endpoints, editorial redesign). Changes vs 1.2 are marked **(v2)**.
 
 ## 1. Repository layout
 
@@ -255,11 +255,13 @@ An event = one real-world topic, grouped across languages by Wikidata qid (key =
   "alerts_count": 3, "alert_ids": ["…"],
   "spark": [{"t": ISODate, "edits": 4}],   // hourly non-bot edits, 24 buckets ending at last_activity's hour (zeros kept)
   "status": "en cours",           // "en cours" if last_activity ≥ ref_time − EVENT_ACTIVE_HOURS, else "terminé"; "historique" for kind historique
+  "significance": 23.4,           // (v2.1) peak_z × log2(1 + distinct_users) × (1 + 0.5 × (len(langs) − 1)); historique: 50
+  "lead_eligible": true,          // (v2.1) distinct_users ≥ 6 OR len(langs) ≥ 2 OR total_edits ≥ 15 OR kind historique; and theme != "autres" unless distinct_users ≥ 10
   "updated_at": ISODate
 }
 ```
 Historical event `alhaouz-2023`: qid of the 2023 Al Haouz earthquake (found via the Wikidata API, not typed from memory), theme `catastrophes`, titles from sitelinks, `first_seen` = `2023-09-08T22:11:00Z`, `peak_at`/`peak_views` (extra field) from the real pageviews series (sum of the 3 languages, same titles as `/api/replay/alhaouz`), `total_views` (extra field), `peak_z` null, `status` "historique".
-Indexes: `{theme:1,last_activity:-1}`, `{status:1,last_activity:-1}`, `{key:1,last_activity:-1}`, `{qid:1}`, `{peak_z:-1}`.
+Indexes: `{significance:-1}`, `{theme:1,last_activity:-1}`, `{status:1,last_activity:-1}`, `{key:1,last_activity:-1}`, `{qid:1}`, `{peak_z:-1}`.
 
 ## 6. Service behaviour
 
@@ -302,6 +304,7 @@ Rate ≤ `ENRICH_RATE_PER_SEC`, User-Agent, 429 → Retry-After / backoff, error
  "titles": {"en": "2026 World Series"}, "description": "…", "thumbnail_url": "…|null",
  "first_seen": "…", "last_activity": "…", "peak_z": 4.9, "peak_at": "…", "langs": ["en"],
  "total_edits": 120, "distinct_users": 45, "alerts_count": 2, "status": "en cours",
+ "significance": 23.4, "lead_eligible": true,
  "spark": [4, 0, 2, …]}                    // 24 hourly values (numbers only)
 ```
 
@@ -341,7 +344,8 @@ Non-bot edits per hour per theme, relative to ref_time; `non_classe` = edits on 
 ```
 
 ### `GET /api/events?theme=&status=&kind=&sort=recent&limit=20` (v2)
-`status` ∈ en cours|terminé|historique; `sort` ∈ recent (last_activity desc) | peak (peak_z desc); limit ≤ 100.
+`status` ∈ en cours|terminé|historique; `sort` ∈ recent (last_activity desc) | peak (peak_z desc) | significance (v2.1, significance desc; eligible first); `lead=true` (v2.1) → only lead_eligible; limit ≤ 100.
+`/api/themes` `top_events` and `/api/themes/{theme}` `events` are ordered by significance (eligible first). (v2.1) `/api/frontpage` returns `{"ref_time", "lead": event summary|null, "lead_reason": "48h"|"7j"|"archives", "sections": [{"id","label","events":[≤4 summaries]}] (all 10 themes, §4a order)}` with the lead rule of DESIGN_SYSTEM §4.
 ```json
 {"count": 30, "items": [ /* event summaries */ ]}
 ```
