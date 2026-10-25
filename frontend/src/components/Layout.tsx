@@ -96,9 +96,9 @@ function LiveStrip() {
       <span className="live-item m-off">
         <b>{fmtInt(d.active_articles)}</b> articles modifiés en 5 min
       </span>
-      <span className="live-item">
+      <Link className="live-item" to="/direct" title="Voir les alertes (page En direct)">
         <b>{fmtInt(d.active_alerts)}</b> {d.active_alerts > 1 ? "alertes" : "alerte"} dans l’heure
-      </span>
+      </Link>
       <span className="live-item m-off">
         <b>{fmtBytes(d.db.total_size_bytes)}</b> en base
       </span>

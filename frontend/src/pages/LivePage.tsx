@@ -154,6 +154,31 @@ export default function LivePage() {
         </div>
       )}
       <div className="vr">
+        <section aria-labelledby="l-alerts">
+          <SectionHeader
+            id="l-alerts"
+            title="Alertes du détecteur"
+            right={alerts.data ? `${plural(alertRows.length, "alerte")}${activeAlerts ? `, dont ${fmtInt(activeAlerts)} des 2 dernières heures` : ""}` : null}
+          />
+          <p className="sh-note" style={{ maxWidth: "68ch" }}>
+            Une alerte se déclenche quand un article reçoit en 5 minutes beaucoup plus de modifications que d’habitude (z-score supérieur à 3) par au moins 3
+            contributeurs. Quatre modifications de trois personnes peuvent suffire : une alerte n’est pas forcément un événement mondial. Les alertes regroupées
+            par sujet forment les <Link to="/themes">événements</Link>. Sans historique, l’habitude de l’article vaut 0 : le z-score est alors plafonné par le
+            nombre de modifications.
+          </p>
+          {!alerts.data ? (
+            alerts.error && !pageDown ? <ErrorState error={alerts.error} onRetry={alerts.refresh} retryMs={30000} /> : <Loading lines={8} />
+          ) : !alerts.data.items.length ? (
+            <EmptyState>Aucune alerte enregistrée.</EmptyState>
+          ) : (
+            <>
+              <AlertsTable alerts={alertRows} showTheme liveCut={liveCut} scroll />
+              <SourceNote>
+                collection <Coll name="alerts" /> (MongoDB), les plus récentes d’abord. z-score en rouge : fenêtre des 2 dernières heures.
+              </SourceNote>
+            </>
+          )}
+        </section>
         <div className="split-main">
           <div className="vr">
             <section aria-labelledby="l-chart">
@@ -227,31 +252,6 @@ export default function LivePage() {
           </aside>
         </div>
 
-        <section aria-labelledby="l-alerts">
-          <SectionHeader
-            id="l-alerts"
-            title="Alertes du détecteur"
-            right={alerts.data ? `${plural(alertRows.length, "alerte")}${activeAlerts ? `, dont ${fmtInt(activeAlerts)} des 2 dernières heures` : ""}` : null}
-          />
-          <p className="sh-note" style={{ maxWidth: "68ch" }}>
-            Une alerte se déclenche quand un article reçoit en 5 minutes beaucoup plus de modifications que d’habitude (z-score supérieur à 3) par au moins 3
-            contributeurs. Quatre modifications de trois personnes peuvent suffire : une alerte n’est pas forcément un événement mondial. Les alertes regroupées
-            par sujet forment les <Link to="/themes">événements</Link>. Sans historique, l’habitude de l’article vaut 0 : le z-score est alors plafonné par le
-            nombre de modifications.
-          </p>
-          {!alerts.data ? (
-            alerts.error && !pageDown ? <ErrorState error={alerts.error} onRetry={alerts.refresh} retryMs={30000} /> : <Loading lines={8} />
-          ) : !alerts.data.items.length ? (
-            <EmptyState>Aucune alerte enregistrée.</EmptyState>
-          ) : (
-            <>
-              <AlertsTable alerts={alertRows} showTheme liveCut={liveCut} scroll />
-              <SourceNote>
-                collection <Coll name="alerts" /> (MongoDB), les plus récentes d’abord. z-score en rouge : fenêtre des 2 dernières heures.
-              </SourceNote>
-            </>
-          )}
-        </section>
       </div>
     </div>
   );
