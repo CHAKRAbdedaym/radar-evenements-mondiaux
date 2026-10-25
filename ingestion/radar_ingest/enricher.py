@@ -15,13 +15,15 @@ CLI:  python -m radar_ingest.enricher                # the service loop
 """
 import argparse
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from pymongo import ReplaceOne, UpdateOne
+from pymongo import ReplaceOne, UpdateMany, UpdateOne
 from pymongo.errors import PyMongoError
 
 from . import common, themes
@@ -66,13 +68,16 @@ class Api:
         self.interval = 1.0 / max(rate_per_sec, 0.1)
         self.next_slot = 0.0
         self.calls = 0
+        self._lock = threading.Lock()   # the limiter is shared by the backfill worker threads
 
     def _throttle(self):
-        now = time.monotonic()
-        delay = self.next_slot - now
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self.next_slot)
+            self.next_slot = slot + self.interval
+        delay = slot - now
         if delay > 0 and STOP.wait(delay):
             raise Stopped()
-        self.next_slot = max(now, self.next_slot) + self.interval
 
     def get(self, url: str, params: dict) -> dict:
         last = "unknown error"
@@ -217,6 +222,7 @@ def parse_entity(qid: str, ent: dict, now: datetime) -> dict:
                 "p106": [], "p570": None, "sitelinks": {}, "fetched_at": now}
     claims = ent.get("claims", {})
     labels = ent.get("labels", {})
+    descs = ent.get("descriptions", {})
     sitelinks = {}
     for site, link in (ent.get("sitelinks") or {}).items():
         if site in ("arwiki", "frwiki", "enwiki") and link.get("title"):
@@ -225,6 +231,8 @@ def parse_entity(qid: str, ent: dict, now: datetime) -> dict:
         "_id": qid,
         "label_fr": (labels.get("fr") or {}).get("value"),
         "label_en": (labels.get("en") or {}).get("value"),
+        "description_fr": (descs.get("fr") or {}).get("value"),
+        "description_en": (descs.get("en") or {}).get("value"),
         "p31": _entity_ids(claims, "P31"), "p279": _entity_ids(claims, "P279"),
         "p106": _entity_ids(claims, "P106"), "p570": _parse_time(claims, "P570"),
         "sitelinks": sitelinks, "fetched_at": now}
@@ -440,7 +448,7 @@ class Enricher:
             chunk = todo[i:i + self.batch_size]
             data = self.api.get(WIKIDATA_API, {
                 "action": "wbgetentities", "format": "json", "ids": "|".join(chunk),
-                "props": "claims|labels|sitelinks", "languages": "fr|en", "sitefilter": SITES})
+                "props": "claims|labels|descriptions|sitelinks", "languages": "fr|en", "sitefilter": SITES})
             now = utcnow()
             new_docs = []
             for q in chunk:
@@ -539,7 +547,7 @@ class Enricher:
         base = {"_id": f"{lang}:{title}", "lang": lang, "title": title, "enriched_at": now}
         if page.get("missing") or page.get("invalid"):
             reason = "titre invalide" if page.get("invalid") else f"page inexistante ou supprimée sur {lang}.wikipedia"
-            return {**base, "resolved_title": None, "missing": True, "qid": None, "description": None,
+            return {**base, "resolved_title": None, "missing": True, "qid": None, "description": None, "description_fr": None,
                     "thumbnail_url": None, "categories": [], "instance_of": [], "occupations": [],
                     "death_date": None, "theme": "autres", "theme_source": themes.SRC_UNKNOWN,
                     "theme_confidence": 0.0, "theme_reason": reason}
@@ -555,6 +563,7 @@ class Enricher:
         return {
             **base, "resolved_title": page.get("title"), "missing": False, "qid": qid,
             "description": page.get("description"),
+            "description_fr": (ent or {}).get("description_fr"),   # Wikidata French description (None if none)
             "thumbnail_url": (page.get("thumbnail") or {}).get("source"),
             "categories": categories,
             "instance_of": [{"qid": q, "label": labels.get(q)} for q in p31],
@@ -621,6 +630,79 @@ class Enricher:
         self.checkpoint()
         log.info("enricher stopped")
 
+    # -- descriptions: cheap batched backfill of description_fr / description_en on cached items
+    def backfill_descriptions(self, rate: float = 4.0):
+        """Fill `description_fr` / `description_en` (Wikidata) on cached ARTICLE items only (class items are not
+        refetched) and copy `description_fr` onto `articles`. Order: events, then articles of events / alerts,
+        then every other cached article qid. props=descriptions only, 50 ids per call. Idempotent."""
+        self.api = Api(rate)
+        db = self.db
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def push(qids):
+            for q in qids:
+                if q and q not in seen:
+                    seen.add(q)
+                    ordered.append(q)
+
+        if "events" in db.list_collection_names():
+            push(d.get("qid") for d in db["events"].find({}, {"qid": 1}))
+        keys = set()
+        for r in db["alerts"].aggregate([{"$group": {"_id": {"lang": "$lang", "title": "$title"}}}]):
+            keys.add(f"{r['_id']['lang']}:{r['_id']['title']}")
+        if "events" in db.list_collection_names():
+            for ev in db["events"].find({}, {"articles": 1, "titles": 1}):
+                keys.update(f"{a['lang']}:{a['title']}" for a in ev.get("articles", []))
+                keys.update(f"{lg}:{t}" for lg, t in (ev.get("titles") or {}).items())
+        keys = sorted(keys)
+        for i in range(0, len(keys), 500):
+            push(d.get("qid") for d in self.articles.find({"_id": {"$in": keys[i:i + 500]}}, {"qid": 1}))
+        n_prio = len(ordered)
+        push(self.articles.distinct("qid"))
+        log.info("description backfill: %d article qids (%d priority: events + alert/event articles)", len(ordered), n_prio)
+        fetched = calls = 0
+        for i in range(0, len(ordered), 500):
+            chunk = ordered[i:i + 500]
+            todo = [d["_id"] for d in self.entities.find(
+                {"_id": {"$in": chunk}, "description_fr": {"$exists": False}}, {"_id": 1})]
+            batches = [todo[j:j + self.batch_size] for j in range(0, len(todo), self.batch_size)]
+            if STOP.is_set():
+                log.info("description backfill interrupted (re-run to continue)")
+                return
+
+            def fetch(ids):
+                try:  # 4 worker threads share ONE rate limiter, so the total stays <= the rate
+                    return self.api.get(WIKIDATA_API, {"action": "wbgetentities", "format": "json",
+                                                       "ids": "|".join(ids), "props": "descriptions",
+                                                       "languages": "fr|en"})
+                except Stopped:
+                    return None
+                except ApiError as exc:
+                    log.error("description batch failed, will be retried on the next run: %s", exc)
+                    return None
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(fetch, batches))
+            for ids, data in zip(batches, results):
+                if data is None:
+                    continue
+                calls += 1
+                ops_e, ops_a = [], []
+                for q in ids:
+                    ent = data.get("entities", {}).get(q, {})
+                    descs = ent.get("descriptions", {}) if "missing" not in ent else {}
+                    fr = (descs.get("fr") or {}).get("value")
+                    en = (descs.get("en") or {}).get("value")
+                    ops_e.append(UpdateOne({"_id": q}, {"$set": {"description_fr": fr, "description_en": en}}))
+                    ops_a.append(UpdateMany({"qid": q}, {"$set": {"description_fr": fr}}))  # qid is indexed
+                    fetched += 1
+                self.entities.bulk_write(ops_e, ordered=False)
+                self.articles.bulk_write(ops_a, ordered=False)
+            if (i // 500) % 10 == 0:
+                log.info("description backfill: %d items fetched in %d calls", fetched, calls)
+        log.info("description backfill done: %d items fetched in %d calls", fetched, calls)
+
     # -- re-classification from the cache (no fetch)
     def reclassify(self):
         self.ref_time = common.latest_event_time(self.db)
@@ -673,6 +755,8 @@ class Enricher:
 
 def main():
     parser = argparse.ArgumentParser(description="enricher: Wikipedia + Wikidata -> articles.theme")
+    parser.add_argument("--backfill-descriptions", action="store_true",
+                        help="fill description_fr / description_en on cached article items (batched, no class items) and exit")
     parser.add_argument("--reclassify", action="store_true",
                         help="re-run the classification of stored articles from the cache (no fetch) and exit")
     args = parser.parse_args()
@@ -680,6 +764,9 @@ def main():
     enricher = Enricher()
     if args.reclassify:
         enricher.reclassify()
+        return
+    if args.backfill_descriptions:
+        enricher.backfill_descriptions(min(enricher.rate, 4.0))
         return
     enricher.run()
 

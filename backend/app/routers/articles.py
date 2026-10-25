@@ -93,6 +93,7 @@ def _enrichment(d: Optional[dict]) -> Optional[dict]:
     return {
         "qid": d.get("qid"),
         "description": d.get("description"),
+        "description_fr": d.get("description_fr"),
         "thumbnail_url": d.get("thumbnail_url"),
         "categories": d.get("categories") or [],
         "instance_of": d.get("instance_of") or [],

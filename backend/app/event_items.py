@@ -98,6 +98,7 @@ def event_summary(d: dict, cut: datetime) -> dict:
         "title": best_title(d),
         "titles": d.get("titles") or {},
         "description": d.get("description"),
+        "description_lang": d.get("description_lang"),
         "thumbnail_url": d.get("thumbnail_url"),
         "first_seen": iso(d.get("first_seen")),
         "last_activity": iso(d.get("last_activity")),

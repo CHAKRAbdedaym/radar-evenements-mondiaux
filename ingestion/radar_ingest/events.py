@@ -217,7 +217,8 @@ class EventManager:
         cut = ref - self.merge
         query = {"kind": "detected", "$or": [
             {"_id": {"$in": sorted(touched)}}, {"last_activity": {"$gte": cut}},
-            {"significance": {"$exists": False}}, {"theme_source": themes.SRC_UNKNOWN}]}
+            {"significance": {"$exists": False}}, {"theme_source": themes.SRC_UNKNOWN},
+            {"description_lang": {"$ne": "fr"}}]}
         n = 0
         for ev in list(evs.find(query)):
             try:
@@ -240,8 +241,9 @@ class EventManager:
         qids = self.article_qids([(a["lang"], a["title"]) for a in arts])
         qid = ev.get("qid") or next((q for q in qids.values() if q), None)
         sitelinks = {}
+        ent = None
         if qid:
-            ent = db["wikidata_entities"].find_one({"_id": qid}, {"sitelinks": 1})
+            ent = db["wikidata_entities"].find_one({"_id": qid}, {"sitelinks": 1, "description_fr": 1})
             sitelinks = {SITE_TO_LANG[k]: v for k, v in (ent or {}).get("sitelinks", {}).items() if k in SITE_TO_LANG}
         titles = dict(sitelinks)
         for a in arts:
@@ -288,13 +290,17 @@ class EventManager:
         else:
             theme, tsrc, tconf = "autres", themes.SRC_UNKNOWN, 0.0
         by_lang = {lg: [d for d in ordered if d["lang"] == lg] for lg in LANG_PREF}
-        description = next((d["description"] for lg in LANG_PREF for d in by_lang[lg] if d.get("description")), None)
+        # French description from Wikidata first (the UI is French), else the best article's own description
+        description, description_lang = (ent or {}).get("description_fr"), "fr"
+        if not description:
+            description, description_lang = next(((d["description"], lg) for lg in LANG_PREF for d in by_lang[lg]
+                                                  if d.get("description")), (None, None))
         thumb = next((d["thumbnail_url"] for lg in LANG_PREF for d in by_lang[lg] if d.get("thumbnail_url")), None)
 
         status = "en cours" if last_activity >= _as_utc(ref) - self.active else "terminé"
         update = {
             "key": qid or ev["key"], "qid": qid, "theme": theme, "theme_source": tsrc, "theme_confidence": tconf,
-            "titles": titles, "articles": arts, "description": description, "thumbnail_url": thumb,
+            "titles": titles, "articles": arts, "description": description, "description_lang": description_lang, "thumbnail_url": thumb,
             "first_seen": first_seen, "last_activity": last_activity, "peak_z": peak["z_score"],
             "peak_at": peak["window_end"], "langs": langs, "total_edits": total_edits, "distinct_users": users,
             "alerts_count": len(alerts), "alert_ids": [str(a["_id"]) for a in alerts], "spark": spark,
@@ -372,15 +378,19 @@ class EventManager:
             active_hours = [h for h, v in sorted(hours.items()) if v > 0]
             arts = [{"lang": lg, "title": REPLAY_TITLES[lg]} for lg in ("ar", "fr", "en")]
             adocs = {d["_id"]: d for d in db["articles"].find({"_id": {"$in": [f"{a['lang']}:{a['title']}" for a in arts]}})}
-            description = next((adocs[f"{lg}:{REPLAY_TITLES[lg]}"]["description"] for lg in LANG_PREF
-                                if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("description")), None)
+            description, description_lang = ent.get("description_fr"), "fr"
+            if not description:
+                description, description_lang = next(
+                    ((adocs[f"{lg}:{REPLAY_TITLES[lg]}"]["description"], lg) for lg in LANG_PREF
+                     if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("description")), (None, None))
             thumb = next((adocs[f"{lg}:{REPLAY_TITLES[lg]}"]["thumbnail_url"] for lg in LANG_PREF
                           if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("thumbnail_url")), None)
             event = {
                 "key": qid, "qid": qid, "kind": "historique", "theme": "catastrophes",
                 "theme_source": res.source, "theme_confidence": res.confidence,
                 "titles": {lg: titles[lg] for lg in ("ar", "fr", "en")}, "articles": arts,
-                "description": description, "thumbnail_url": thumb, "first_seen": HIST_FIRST_SEEN,
+                "description": description, "description_lang": description_lang, "thumbnail_url": thumb,
+                "first_seen": HIST_FIRST_SEEN,
                 "last_activity": active_hours[-1], "peak_z": None, "peak_at": peak_hour,
                 "peak_views": hours[peak_hour], "total_views": sum(hours.values()), "pageviews_hours": len(hours),
                 "langs": ["ar", "fr", "en"], "total_edits": 0, "distinct_users": 0, "alerts_count": 0,

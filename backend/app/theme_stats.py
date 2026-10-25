@@ -52,7 +52,7 @@ async def _build_snapshot(hours: int, detail: bool) -> dict:
         {"$project": {"users": 0}},
         {"$lookup": {
             "from": "articles", "localField": "_aid", "foreignField": "_id", "as": "a",
-            "pipeline": [{"$project": {"theme": 1, "theme_source": 1, "qid": 1, "description": 1,
+            "pipeline": [{"$project": {"theme": 1, "theme_source": 1, "qid": 1, "description": 1, "description_fr": 1,
                                        "thumbnail_url": 1}}],
         }},
         {"$addFields": {"a": {"$first": "$a"}}},
@@ -70,7 +70,7 @@ async def _build_snapshot(hours: int, detail: bool) -> dict:
                     "output": {
                         "lang": "$_id.lang", "title": "$_id.title", "edits_24h": "$edits",
                         "distinct_users": "$distinct_users", "qid": "$a.qid",
-                        "description": "$a.description", "thumbnail_url": "$a.thumbnail_url",
+                        "description": "$a.description", "description_fr": "$a.description_fr", "thumbnail_url": "$a.thumbnail_url",
                         "theme_source": "$a.theme_source",
                     },
                 }}}},

@@ -9,7 +9,7 @@ from app.util import bad, iso
 
 router = APIRouter(prefix="/themes", tags=["themes"])
 
-TOP_KEYS = ("lang", "title", "edits_24h", "distinct_users", "qid", "description", "thumbnail_url",
+TOP_KEYS = ("lang", "title", "edits_24h", "distinct_users", "qid", "description", "description_fr", "thumbnail_url",
             "theme_source")
 
 
