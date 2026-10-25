@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Lang, type SearchResult, type ThemeId } from "../api";
 import { usePolling } from "../hooks/usePolling";
+import { useStats } from "../lib/stats";
 import { useTitle } from "../hooks/useTitle";
 import { fmtDayTimeUtc, fmtInt, plural } from "../lib/format";
 import { highlight } from "../lib/highlight";
 import { LANG_CODE, LANG_ORDER, articlePath, dirOf } from "../lib/lang";
 import { themePath } from "../lib/themes";
 import { cleanComment, cleanSnippet } from "../lib/wikitext";
-import { Choice } from "../components/blocks";
+import { Choice, Pagination } from "../components/blocks";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { Coll, LangCode, MetaLine, SectionHeader, SourceNote } from "../components/text";
 
@@ -43,11 +44,6 @@ function Result({ g, q }: { g: Group; q: string }) {
   const latest = g.hits.reduce((a, h) => (h.timestamp > a ? h.timestamp : a), best.timestamp);
   return (
     <li className="quote" style={{ paddingTop: 16 }}>
-      {g.theme && g.themeLabel && (
-        <p className="kicker" style={{ marginBottom: 6 }}>
-          <Link to={themePath(g.theme)}>{g.themeLabel}</Link>
-        </p>
-      )}
       <h3 className="t-20">
         <Link to={articlePath(g.lang, g.title)} className="hl" dir={dirOf(g.lang)} lang={g.lang}>
           {g.title}
@@ -67,7 +63,11 @@ function Result({ g, q }: { g: Group; q: string }) {
         className="num"
         items={[
           <LangCode lang={g.lang} />,
-          g.theme ? null : "thème non classé",
+          g.theme && g.themeLabel ? (
+            <Link to={themePath(g.theme)} className="quiet">
+              {g.themeLabel}
+            </Link>
+          ) : null,
           fmtDayTimeUtc(latest),
           g.hits.length > 1 ? (
             <Link to={articlePath(g.lang, g.title)}>
@@ -92,10 +92,15 @@ export default function SearchPage() {
   useTitle(q ? `Recherche : ${q}` : "Recherche");
 
   const themes = usePolling((s) => api.themes(s).catch(() => null), null);
-  const stats = usePolling((s) => api.stats(s).catch(() => null), null);
+  const stats = useStats();
   const valid = q.length >= 2 && q.length <= 100;
   const res = usePolling((s) => (valid ? api.search(q, { lang, theme, limit: 50 }, s) : Promise.resolve(null)), null, [q, lang, theme]);
   const groups = useMemo(() => (res.data ? group(res.data.items) : []), [res.data]);
+  const PER = 20;
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [q, lang, theme]);
+  const pages = Math.max(1, Math.ceil(groups.length / PER));
+  const shown = groups.slice((page - 1) * PER, page * PER);
 
   const set = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -127,6 +132,29 @@ export default function SearchPage() {
             Rechercher
           </button>
         </form>
+        <div className="filters" style={{ marginTop: 12 }}>
+          <Choice<string>
+            label="Langue"
+            value={lang ?? "all"}
+            onChange={(v) => set({ lang: v === "all" ? null : v })}
+            options={[{ value: "all", label: "toutes" }, ...LANG_ORDER.map((l) => ({ value: l, label: <span className="mono">{LANG_CODE[l]}</span> }))]}
+          />
+          {themes.data && (
+            <span className="choice">
+              <label className="lbl" htmlFor="theme">
+                Thème :
+              </label>
+              <select id="theme" className="select" value={theme ?? ""} onChange={(e) => set({ theme: e.target.value || null })}>
+                <option value="">tous</option>
+                {themes.data.items.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </span>
+          )}
+        </div>
         <p className="t-14 muted" style={{ marginTop: 10 }}>
           Exemples :{" "}
           {EXAMPLES.map((ex, i) => (
@@ -158,10 +186,18 @@ export default function SearchPage() {
           ) : (
             <>
               <ul>
-                {groups.map((g) => (
+                {shown.map((g) => (
                   <Result key={`${g.lang}:${g.title}`} g={g} q={q} />
                 ))}
               </ul>
+              <Pagination
+                page={page}
+                pages={pages}
+                onPage={(p) => {
+                  setPage(p);
+                  document.getElementById("s-res")?.scrollIntoView({ block: "start" });
+                }}
+              />
               <SourceNote>
                 index texte MongoDB (<code>$text</code>) sur la collection <Coll name="edit_texts" />, 50 meilleurs passages regroupés par article. Balisage
                 wiki retiré pour la lecture.
@@ -170,34 +206,15 @@ export default function SearchPage() {
           )}
         </section>
 
-        <aside className="stack-24" aria-label="Filtres">
-          <div>
-            <SectionHeader as="h3" title="Langue" thin />
-            <Choice<string>
-              hideLabel
-              label="Langue"
-              value={lang ?? "all"}
-              onChange={(v) => set({ lang: v === "all" ? null : v })}
-              options={[{ value: "all", label: "toutes" }, ...LANG_ORDER.map((l) => ({ value: l, label: <span className="mono">{LANG_CODE[l]}</span> }))]}
-            />
-          </div>
-          {themes.data && (
-            <div>
-              <SectionHeader as="h3" title="Thème" thin />
-              <label className="sr-only" htmlFor="theme">
-                Thème
-              </label>
-              <select id="theme" className="select" value={theme ?? ""} onChange={(e) => set({ theme: e.target.value || null })}>
-                <option value="">Tous les thèmes</option>
-                {themes.data.items.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-              <p className="source">Thème de l’article (collection <Coll name="articles" />) ; les articles pas encore classés sont exclus du filtre.</p>
-            </div>
-          )}
+        <aside className="stack-16" aria-label="À propos de la recherche">
+          <SectionHeader as="h3" title="Comment ça marche" thin />
+          <p className="t-14 muted">
+            MongoDB cherche les mots dans les textes ajoutés et les résumés de modification (index texte, sans accents ni majuscules). Les passages d’un même
+            article sont regroupés ; les 50 meilleurs passages sont lus.
+          </p>
+          <p className="t-14 muted">
+            Le thème vient de la fiche de l’article (collection <Coll name="articles" />) ; un article pas encore classé n’apparaît pas quand un thème est choisi.
+          </p>
         </aside>
       </div>
     </div>

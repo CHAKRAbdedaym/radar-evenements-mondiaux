@@ -2,8 +2,9 @@ import { Fragment, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError, type Classification, type CollectionName, type DataKind, type Explorer, type Lang } from "../api";
 import { usePolling } from "../hooks/usePolling";
+import { useStats } from "../lib/stats";
 import { useTitle } from "../hooks/useTitle";
-import { fmtBytes, fmtDayTimeUtc, fmtInt, fmtPct, fmtZ } from "../lib/format";
+import { fmtBytes, fmtDay, fmtDayTimeUtc, fmtInt, fmtPct, fmtTimeSec, fmtZ } from "../lib/format";
 import { articlePath } from "../lib/lang";
 import { eventPath, themeSourceLabel } from "../lib/themes";
 import { Pagination } from "../components/blocks";
@@ -30,7 +31,10 @@ type Doc = Record<string, unknown>;
 const isLangSafe = (v: unknown): v is Lang => v === "ar" || v === "fr" || v === "en";
 
 const str = (v: unknown): string => (v === null || v === undefined ? "–" : typeof v === "string" ? v : typeof v === "number" ? fmtInt(v) : JSON.stringify(v));
-const date = (v: unknown): ReactNode => (typeof v === "string" && /^\d{4}-\d\d-\d\dT/.test(v) ? <span className="nw">{fmtDayTimeUtc(v)}</span> : str(v));
+let sameDayMode = false; // set by Browser for the current page of documents
+const isIso = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d\d-\d\dT/.test(v);
+const date = (v: unknown): ReactNode =>
+  isIso(v) ? <span className="nw">{sameDayMode ? fmtTimeSec(v) : fmtDayTimeUtc(v)}</span> : str(v);
 const lang = (v: unknown): ReactNode => (isLangSafe(v) ? <LangCode lang={v} /> : str(v));
 const title = (d: Doc): ReactNode =>
   isLangSafe(d.lang) && typeof d.title === "string" ? (
@@ -186,7 +190,8 @@ async function loadOverview(signal: AbortSignal) {
   return res;
 }
 
-function Overview({ onPick }: { onPick: (c: CollectionName) => void }) {
+export function Overview({ onPick }: { onPick?: (c: CollectionName) => void }) {
+  const stats = useStats();
   const st = usePolling(loadOverview, 60000);
   if (!st.data) return st.error ? <ErrorState error={st.error} onRetry={st.refresh} retryMs={60000} /> : <Loading lines={9} />;
   const total = st.data.reduce((a, r) => a + (r.e?.count ?? 0), 0);
@@ -199,7 +204,7 @@ function Overview({ onPick }: { onPick: (c: CollectionName) => void }) {
               <th>Collection</th>
               <th>Nature</th>
               <th className="r">Documents</th>
-              <th className="r hide-m">Taille</th>
+              <th className="r">Taille</th>
               <th className="hide-m">Contenu</th>
               <th className="hide-m">Source</th>
             </tr>
@@ -210,13 +215,17 @@ function Overview({ onPick }: { onPick: (c: CollectionName) => void }) {
               return (
                 <tr key={r.name}>
                   <td className="nw">
-                    <button type="button" className="btn-text mono" style={{ fontWeight: 400 }} onClick={() => onPick(r.name)}>
-                      {r.name}
-                    </button>
+                    {onPick ? (
+                      <button type="button" className="btn-text mono" style={{ fontWeight: 400 }} onClick={() => onPick(r.name)}>
+                        {r.name}
+                      </button>
+                    ) : (
+                      <code>{r.name}</code>
+                    )}
                   </td>
                   <td className="nw">{r.e ? KIND_FR[r.e.data_kind] : "–"}</td>
                   <td className="r">{r.e ? fmtInt(r.e.count) : <span className="faint">pas encore créée</span>}</td>
-                  <td className="r hide-m">{r.e ? fmtBytes(r.e.size_bytes) : "–"}</td>
+                  <td className="r">{r.e ? fmtBytes(r.e.size_bytes) : "–"}</td>
                   <td className="hide-m">{info.what}</td>
                   <td className="hide-m muted">{info.source}</td>
                 </tr>
@@ -226,7 +235,8 @@ function Overview({ onPick }: { onPick: (c: CollectionName) => void }) {
         </table>
       </div>
       <SourceNote>
-        statistiques MongoDB (<code>collStats</code>) via l’API, base <Coll name="radar" /> : {fmtInt(total)} documents au total.
+        statistiques MongoDB (<code>collStats</code>) via l’API. Base <Coll name="radar" /> : {fmtInt(total)} documents
+        {stats.data ? `, ${fmtBytes(stats.data.db.total_size_bytes)} en base (données compressées + index, le chiffre du bandeau)` : ""}. La colonne Taille donne les données non compressées.
       </SourceNote>
     </>
   );
@@ -320,6 +330,10 @@ function Browser({ name }: { name: CollectionName }) {
   const st = usePolling((s) => api.explorer(name, { limit, skip: (page - 1) * limit }, s), null, [name, page]);
   const info = COLLS.find((c) => c.name === name)!;
   const d: Explorer | null = st.data;
+  const firstKey = info.columns[0]?.key;
+  const days = new Set((d?.docs ?? []).map((doc) => (isIso(doc[firstKey]) ? fmtDay(doc[firstKey] as string) : "")));
+  sameDayMode = days.size === 1 && !days.has("");
+  const dayCaption = sameDayMode ? [...days][0] : null;
   return (
     <div>
       <p className="t-14 muted" style={{ marginBottom: 12, maxWidth: "80ch" }}>
@@ -344,14 +358,12 @@ function Browser({ name }: { name: CollectionName }) {
             <table className="dt">
               <thead>
                 <tr>
-                  {info.columns.map((c) => (
+                  {info.columns.map((c, k) => (
                     <th key={c.key} className={`${c.r ? "r" : ""} ${c.hm ? "hide-m" : ""}`}>
-                      {c.label}
+                      {k === 0 && dayCaption ? `${c.label} (${dayCaption}, UTC)` : c.label}
                     </th>
                   ))}
-                  <th>
-                    <span className="sr-only">Document</span>
-                  </th>
+                  <th>Document</th>
                 </tr>
               </thead>
               <tbody>
@@ -364,8 +376,15 @@ function Browser({ name }: { name: CollectionName }) {
                         </td>
                       ))}
                       <td className="nw">
-                        <button type="button" className="btn-text t-12" style={{ fontWeight: 400, color: "var(--ink-2)" }} aria-expanded={open === i} onClick={() => setOpen(open === i ? null : i)}>
-                          {open === i ? "Masquer" : "Voir le document brut"}
+                        <button
+                          type="button"
+                          className="btn-text"
+                          style={{ fontWeight: 400, color: "var(--ink-2)" }}
+                          aria-expanded={open === i}
+                          title="Voir le document brut (JSON)"
+                          onClick={() => setOpen(open === i ? null : i)}
+                        >
+                          {open === i ? "Masquer" : "JSON"}
                         </button>
                       </td>
                     </tr>
@@ -385,7 +404,8 @@ function Browser({ name }: { name: CollectionName }) {
           </div>
           <Pagination
             page={page}
-            pages={Math.min(Math.ceil(d.count / limit), Math.floor(100000 / limit))}
+            pages={Math.ceil(d.count / limit)}
+            maxPage={Math.floor(100000 / limit)}
             onPage={(p) => {
               setOpen(null);
               setPage(p);

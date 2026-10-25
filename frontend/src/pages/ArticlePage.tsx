@@ -3,14 +3,14 @@ import { Link, useLocation } from "react-router-dom";
 import { api, ApiError, type Article, type Lang } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useTitle } from "../hooks/useTitle";
-import { fmtDay, fmtDayTimeUtc, fmtInt, fmtSigned, fmtTime, fmtTimeUtc, plural } from "../lib/format";
+import { fmtDay, fmtDayRange, fmtDayTimeUtc, fmtInt, fmtSigned, fmtTime, fmtTimeUtc, plural } from "../lib/format";
 import { LANG_NAME, dirOf, isLang, wikiName, wikiUrl } from "../lib/lang";
-import { themePath, themeSourceSentence } from "../lib/themes";
-import { cleanComment, isRevert } from "../lib/wikitext";
+import { reasonSentence, themePath, themeSourceSentence } from "../lib/themes";
+import { cleanComment, cleanSnippet, isRevert, textLength } from "../lib/wikitext";
 import { AlertsTable } from "../components/AlertsTable";
 import { EditText, FactBox, WikiImage } from "../components/blocks";
 import { ChartFrame, ColumnChart } from "../components/charts";
-import { EventCompact } from "../components/EventItem";
+import { EventCompact, ForeignDescription } from "../components/EventItem";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { Coll, ExtLink, Kicker, LangCode, MetaLine, SectionHeader, SourceNote, Timestamp } from "../components/text";
 
@@ -54,7 +54,7 @@ function EditsChart({ a }: { a: Article }) {
       title={`Modifications par tranche de 5 min, de ${fmtTimeUtc(data.xs[0]).replace(" UTC", "")} à ${fmtTimeUtc(data.xs[data.xs.length - 1] + BUCKET)}${alertWindows.length ? " ; en rouge, les fenêtres d’alerte" : ""}`}
       source={
         <SourceNote>
-          collection <Coll name="edits" /> (MongoDB), robots compris, 24 dernières heures : {plural(total, "modification")}.
+          collection <Coll name="edits" /> (MongoDB) : {fmtInt(total)} des {plural(a.stats.edits_total, "modification")} de l’article ont eu lieu ces 24 dernières heures (robots compris).
         </SourceNote>
       }
     >
@@ -75,7 +75,7 @@ function EditsChart({ a }: { a: Article }) {
 
 function EditsTable({ a }: { a: Article }) {
   const [all, setAll] = useState(false);
-  const rows = all ? a.edits : a.edits.slice(0, 15);
+  const rows = all ? a.edits : a.edits.slice(0, 10);
   return (
     <>
       <div className="table-wrap">
@@ -98,7 +98,7 @@ function EditsTable({ a }: { a: Article }) {
                 </td>
                 <td className="r">{fmtSigned(e.delta_bytes)}</td>
                 <td className="hide-m muted" style={{ maxWidth: 360 }}>
-                  {isRevert(e.comment) ? "Annulation · " : ""}
+                  {isRevert(e.comment) && <span className="kicker" style={{ display: "block" }}>Annulation</span>}
                   <bdi dir="auto">{cleanComment(e.comment) || "–"}</bdi>
                 </td>
               </tr>
@@ -106,7 +106,7 @@ function EditsTable({ a }: { a: Article }) {
           </tbody>
         </table>
       </div>
-      {a.edits.length > 15 && (
+      {a.edits.length > 10 && (
         <button type="button" className="btn-text" style={{ marginTop: 8 }} onClick={() => setAll((v) => !v)}>
           {all ? "Afficher moins" : `Afficher les ${fmtInt(a.edits.length)} dernières modifications`}
         </button>
@@ -121,24 +121,20 @@ function EditsTable({ a }: { a: Article }) {
 function Why({ a }: { a: Article }) {
   const en = a.enrichment;
   if (!en) return <p className="t-14 muted">Cet article n’a pas encore été classé par l’enrichisseur (Wikipédia + Wikidata).</p>;
+  const sentence = reasonSentence(en.theme_reason, en.theme_label);
   return (
     <div className="stack-8">
       <p className="t-14">{themeSourceSentence(en.theme_source, en.theme_confidence)}</p>
+      {sentence && <p className="t-14">{sentence}</p>}
       {en.theme_reason && (
-        <p className="t-14 muted">
-          Règle appliquée : <span className="mono" style={{ fontSize: 12.5 }}>{en.theme_reason}</span>
+        <p className="mono faint" style={{ fontSize: 12 }}>
+          {en.theme_reason}
         </p>
       )}
-      {en.instance_of.length > 0 && (
-        <p className="t-14 muted">
-          Nature (Wikidata P31) : {en.instance_of.map((i) => i.label ?? i.qid).join(", ")}
-        </p>
-      )}
-      {en.occupations.length > 0 && <p className="t-14 muted">Métier (P106) : {en.occupations.map((i) => i.label ?? i.qid).join(", ")}</p>}
       {en.categories.length > 0 && (
         <p className="t-14 muted">
-          Catégories : {en.categories.slice(0, 8).join(" · ")}
-          {en.categories.length > 8 ? ` (et ${fmtInt(en.categories.length - 8)} autres)` : ""}
+          Catégories Wikipédia : {en.categories.slice(0, 3).join(" · ")}
+          {en.categories.length > 3 ? ` (et ${fmtInt(en.categories.length - 3)} autres)` : ""}
         </p>
       )}
     </div>
@@ -192,6 +188,34 @@ export default function ArticlePage() {
 
   const en = a.enrichment;
   const dir = dirOf(a.lang);
+  const descFr = en?.description_fr ?? null;
+  const robots = a.stats.edits_total - a.stats.edits_human;
+  // Quotes: at most 3, meaningful additions first (≥ 20 characters).
+  const prose = (t: { added_text: string | null }) => {
+    const c = cleanSnippet(t.added_text);
+    return c.length >= 30 && !/[|=]/.test(c) ? 1 : 0;
+  };
+  const quotes = [...a.texts].sort((x, y) => prose(y) - prose(x) || textLength(y.added_text) - textLength(x.added_text)).slice(0, 3);
+  const facts = (
+    <FactBox
+      title="Repères"
+      facts={[
+        { label: "Modifications reçues", value: fmtInt(a.stats.edits_total), note: robots > 0 ? `dont ${plural(robots, "par un robot", "par des robots")}` : undefined },
+        { label: "Contributeurs", value: fmtInt(a.stats.distinct_users) },
+        {
+          label: "Taille ajoutée",
+          value: `${fmtSigned(a.stats.delta_bytes)} octets`,
+          note: a.stats.delta_bytes === 0 && a.stats.edits_total > 1 ? "les ajouts et les retraits s’annulent" : undefined,
+        },
+        { label: "Première modification", value: a.stats.first_edit ? fmtDayTimeUtc(a.stats.first_edit) : "–" },
+        { label: "Dernière modification", value: a.stats.last_edit ? fmtDayTimeUtc(a.stats.last_edit) : "–" },
+        a.pageviews_count > 0
+          ? { label: "Pages vues", value: `${fmtInt(a.pageviews_count)} heures chargées` }
+          : { label: "Pages vues", value: <span className="t-14 muted">non chargées pour cet article</span> },
+      ]}
+    />
+  );
+  const photo = <WikiImage eager url={en?.thumbnail_url} lang={a.lang} title={a.title} alt={a.title} />;
 
   return (
     <div>
@@ -209,11 +233,14 @@ export default function ArticlePage() {
         <h1 className="t-40" dir={dir} lang={a.lang} style={{ maxWidth: "28ch" }}>
           {a.title}
         </h1>
-        {en?.description && (
-          <p className="standfirst" dir="auto">
-            {en.description.charAt(0).toUpperCase() + en.description.slice(1)}
-          </p>
-        )}
+        <p className="standfirst">
+          {descFr
+            ? descFr.charAt(0).toUpperCase() + descFr.slice(1)
+            : `${plural(a.stats.edits_total, "modification")} par ${plural(a.stats.distinct_users, "contributeur")} reçues par le flux${
+                a.stats.first_edit && a.stats.last_edit ? `, ${fmtDayRange(a.stats.first_edit, a.stats.last_edit)}` : ""
+              }.`}
+        </p>
+        {!descFr && en?.description && <ForeignDescription text={en.description} lang={a.lang === "fr" ? "en" : a.lang} />}
         <MetaLine
           items={[
             <LangCode lang={a.lang} />,
@@ -224,8 +251,17 @@ export default function ArticlePage() {
         />
       </header>
 
+      <div className="show-m-block stack-16" style={{ marginBottom: 32 }}>
+        {photo}
+        {facts}
+      </div>
+
       <div className="split-main">
         <div className="vr">
+          <section aria-labelledby="a-edits">
+            <SectionHeader id="a-edits" title="Dernières modifications" right={a.edits.length ? `${fmtInt(a.edits.length)} plus récentes` : null} />
+            {a.edits.length ? <EditsTable a={a} /> : <EmptyState>Aucune modification reçue par le flux pour cet article.</EmptyState>}
+          </section>
           {(a.events?.length ?? 0) > 0 && (
             <section aria-labelledby="a-events">
               <SectionHeader id="a-events" title="Événements liés" />
@@ -241,11 +277,11 @@ export default function ArticlePage() {
             <EditsChart a={a} />
           </section>
           <section aria-labelledby="a-texts">
-            <SectionHeader id="a-texts" title="Textes ajoutés et retirés" right={a.texts.length ? `${fmtInt(a.texts.length)} dernières révisions` : null} />
-            {a.texts.length ? (
+            <SectionHeader id="a-texts" title="Textes ajoutés et retirés" right={a.texts.length > 3 ? `3 sur ${fmtInt(a.texts.length)} révisions lues` : null} />
+            {quotes.length ? (
               <>
                 <ul>
-                  {a.texts.slice(0, 8).map((t) => (
+                  {quotes.map((t) => (
                     <EditText key={t.id} lang={a.lang} timestamp={t.timestamp} comment={t.comment} added={t.added_text} removed={t.removed_text} rev={t.rev_new} />
                   ))}
                 </ul>
@@ -262,40 +298,28 @@ export default function ArticlePage() {
           {a.alerts.length > 0 && (
             <section aria-labelledby="a-alerts">
               <SectionHeader id="a-alerts" title="Alertes du détecteur" right={plural(a.alerts.length, "alerte")} />
-              <AlertsTable alerts={a.alerts} />
+              <AlertsTable alerts={a.alerts} compact />
               <SourceNote>
                 collection <Coll name="alerts" />.
               </SourceNote>
             </section>
           )}
-          <section aria-labelledby="a-edits">
-            <SectionHeader id="a-edits" title="Dernières modifications" />
-            {a.edits.length ? <EditsTable a={a} /> : <EmptyState>Aucune modification reçue par le flux pour cet article.</EmptyState>}
-          </section>
         </div>
 
-        <aside className="stack-24" aria-label="Fiche">
-          <WikiImage eager url={en?.thumbnail_url} lang={a.lang} title={a.title} alt={a.title} />
-          <FactBox
-            title="Fiche"
-            facts={[
-              { label: "Modifications reçues", value: fmtInt(a.stats.edits_total), note: `dont ${fmtInt(a.stats.edits_human)} humaines` },
-              { label: "Contributeurs", value: fmtInt(a.stats.distinct_users) },
-              {
-                label: "Octets ajoutés (somme)",
-                value: fmtSigned(a.stats.delta_bytes),
-                note: a.stats.delta_bytes === 0 && a.stats.edits_total > 1 ? "les ajouts et les retraits s’annulent" : undefined,
-              },
-              { label: "Première modification", value: a.stats.first_edit ? fmtDayTimeUtc(a.stats.first_edit) : "–" },
-              { label: "Dernière modification", value: a.stats.last_edit ? fmtDayTimeUtc(a.stats.last_edit) : "–" },
-              { label: "Heures de vues chargées", value: fmtInt(a.pageviews_count) },
-            ]}
-          />
+        <aside className="stack-24" aria-label="Repères">
+          <div className="hide-m-block stack-24">
+            {photo}
+            {facts}
+          </div>
           <section>
-            <SectionHeader as="h3" title="Liens" thin />
+            <SectionHeader as="h3" title="Pourquoi ce thème ?" thin />
+            <Why a={a} />
+          </section>
+          <section>
+            <SectionHeader as="h3" title="Sur Wikipédia" thin />
             <ul className="links-list">
               <li>
-                <ExtLink href={a.url}>Lire sur {wikiName(a.lang)}</ExtLink>
+                <ExtLink href={a.url}>{wikiName(a.lang)}</ExtLink>
               </li>
               {en?.wikidata_url && (
                 <li>
@@ -305,10 +329,6 @@ export default function ArticlePage() {
                 </li>
               )}
             </ul>
-          </section>
-          <section>
-            <SectionHeader as="h3" title="Pourquoi ce thème ?" thin />
-            <Why a={a} />
           </section>
           <p className="source">
             Article en {LANG_NAME[a.lang]} ; document <span className="mono">{`${a.lang}:${a.title}`}</span> de la collection <Coll name="articles" />

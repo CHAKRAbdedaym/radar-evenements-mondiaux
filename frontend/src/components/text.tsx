@@ -82,13 +82,13 @@ export function StatusLabel({ status }: { status: EventStatus }) {
       </span>
     );
   if (status === "historique") return <span className="status hist muted">Historique</span>;
-  return <span className="status muted">Terminé</span>;
+  return null; // an ended event carries no status: the dates in the meta line say it
 }
 
-/** Theme kicker linking to the theme page; accent only when the event is live. */
-export function Kicker({ theme, label, live, extra }: { theme?: string | null; label?: string | null; live?: boolean; extra?: ReactNode }) {
+/** Theme kicker linking to the theme page, always --ink-2 (only "● En cours" next to it is accent). */
+export function Kicker({ theme, label, extra }: { theme?: string | null; label?: string | null; live?: boolean; extra?: ReactNode }) {
   return (
-    <p className={`kicker ${live ? "is-live" : ""}`}>
+    <p className="kicker">
       {theme && label ? <Link to={themePath(theme)}>{label}</Link> : <span>{label ?? "Thème non déterminé"}</span>}
       {extra}
     </p>

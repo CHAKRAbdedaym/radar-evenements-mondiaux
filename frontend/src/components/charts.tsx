@@ -45,7 +45,8 @@ function niceStep(max: number, count: number): number {
   const raw = max / count;
   const p = Math.pow(10, Math.floor(Math.log10(raw)));
   const m = raw / p;
-  const k = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
+  // Counts: never a fractional step (2.5 would print "3, 5, 8" once rounded).
+  const k = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 && p >= 10 ? 2.5 : m <= 5 ? 5 : 10;
   return Math.max(1, k * p);
 }
 
@@ -99,6 +100,8 @@ interface LineChartProps {
   ariaLabel: string;
   /** Show the end-label value ("EN 1 579"). */
   endValues?: boolean;
+  /** The last bucket is incomplete: dashed last segment + this note after the end label (e.g. "minute en cours"). */
+  partialLast?: string;
 }
 
 export function LineChart({
@@ -115,6 +118,7 @@ export function LineChart({
   unit,
   ariaLabel,
   endValues = true,
+  partialLast,
 }: LineChartProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
@@ -132,14 +136,15 @@ export function LineChart({
       ({ top, ticks } = linearTicks(max));
     }
     const left = axisWidth(ticks, fmtInt);
-    const endLabelW = Math.max(...series.map((s) => (s.label.length + (endValues ? 6 : 0)) * 7.2)) + 12;
+    const endLabelW = Math.max(...series.map((s) => (s.label.length + (endValues ? 6 : 0)) * 7.2)) + 16 + (partialLast ? partialLast.length * 6.4 : 0);
     const right = Math.max(24, endLabelW);
     const topPad = marker ? 26 : 10;
     const bottom = 26;
     const [x0, x1] = xDomain ?? [xs[0] ?? 0, xs[xs.length - 1] ?? 1];
     const plotW = Math.max(40, width - left - right);
     const plotH = height - topPad - bottom;
-    const sx = (t: number) => left + (x1 === x0 ? plotW / 2 : ((t - x0) / (x1 - x0)) * plotW);
+    const inset = 10; // first point never sits on the y-axis
+    const sx = (t: number) => left + inset + (x1 === x0 ? (plotW - inset) / 2 : ((t - x0) / (x1 - x0)) * (plotW - inset));
     const sy = (v: number) => {
       if (log) {
         const lv = Math.log10(Math.max(1, v));
@@ -148,18 +153,24 @@ export function LineChart({
       return topPad + plotH - (v / top) * plotH;
     };
     return { ticks, top, left, right, topPad, bottom, x0, x1, plotW, plotH, sx, sy };
-  }, [series, log, width, height, marker, xDomain, xs, endValues]);
+  }, [series, log, width, height, marker, xDomain, xs, endValues, partialLast]);
 
   const { ticks, left, topPad, plotW, plotH, sx, sy, x0, x1 } = geo;
 
   const visible = (v: number | null): v is number => v !== null && (!log || v > 0);
 
-  // Paths split at gaps; isolated points drawn as small dots.
+  // Paths split at gaps; isolated points drawn as small dots; an incomplete last bucket is a dashed segment.
+  const lastIdx = xs.length - 1;
   const paths = series.map((s) => {
     let d = "";
+    let tail = "";
     const dots: [number, number][] = [];
     let run = 0;
     s.values.forEach((v, i) => {
+      if (partialLast && i === lastIdx && visible(v) && visible(s.values[i - 1] ?? null)) {
+        tail = `M${sx(xs[i - 1]).toFixed(1)},${sy(s.values[i - 1] as number).toFixed(1)}L${sx(xs[i]).toFixed(1)},${sy(v).toFixed(1)}`;
+        return;
+      }
       if (!visible(v)) {
         if (run === 1) {
           const j = i - 1;
@@ -171,11 +182,11 @@ export function LineChart({
       d += `${run ? "L" : "M"}${sx(xs[i]).toFixed(1)},${sy(v).toFixed(1)}`;
       run++;
     });
-    if (run === 1) {
+    if (run === 1 && !tail) {
       const j = s.values.length - 1;
       dots.push([sx(xs[j]), sy(s.values[j] as number)]);
     }
-    return { s, d, dots };
+    return { s, d, dots, tail };
   });
 
   // Direct end labels with collision avoidance (min 15px apart).
@@ -184,14 +195,16 @@ export function LineChart({
       let i = s.values.length - 1;
       while (i >= 0 && !visible(s.values[i])) i--;
       if (i < 0) return null;
-      return { s, i, x: sx(xs[i]), y: sy(s.values[i] as number), v: s.values[i] as number };
+      const py = sy(s.values[i] as number);
+      return { s, i, x: sx(xs[i]), y: py, py, v: s.values[i] as number };
     })
     .filter((e): e is NonNullable<typeof e> => e !== null)
     .sort((a, b) => a.y - b.y);
-  for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 15) ends[k].y = ends[k - 1].y + 15;
+  const GAP = 16;
+  for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < GAP) ends[k].y = ends[k - 1].y + GAP;
   const bottomLimit = topPad + plotH;
   for (let k = ends.length - 1; k >= 0; k--) {
-    const limit = k === ends.length - 1 ? bottomLimit : ends[k + 1].y - 15;
+    const limit = k === ends.length - 1 ? bottomLimit : ends[k + 1].y - GAP;
     if (ends[k].y > limit) ends[k].y = limit;
   }
 
@@ -291,9 +304,10 @@ export function LineChart({
             </g>
           )}
           {/* series */}
-          {paths.map(({ s, d, dots }) => (
+          {paths.map(({ s, d, dots, tail }) => (
             <g key={s.key}>
               <path d={d} fill="none" stroke={s.color} strokeWidth={s.strokeWidth ?? 2} strokeLinejoin="round" strokeLinecap="round" />
+              {tail && <path d={tail} fill="none" stroke={s.color} strokeWidth={s.strokeWidth ?? 2} strokeDasharray="3 3" />}
               {dots.map(([x, y], i) => (
                 <circle key={i} cx={x} cy={y} r={2.5} fill={s.color} />
               ))}
@@ -301,10 +315,14 @@ export function LineChart({
           ))}
           {/* direct end labels */}
           {ends.map((e) => (
-            <text key={e.s.key} x={e.x + 8} y={e.y + 4} fontSize={12} fontFamily={FONT} fill={CHART.ink} style={{ fontVariantNumeric: "tabular-nums" }}>
-              <tspan fontWeight={600}>{e.s.label}</tspan>
-              {endValues && <tspan fill={CHART.ink2}>{` ${fmtInt(e.v)}`}</tspan>}
-            </text>
+            <g key={e.s.key}>
+              {Math.abs(e.y - e.py) > 3 && <line x1={e.x + 2} y1={e.py} x2={e.x + 7} y2={e.y} stroke={CHART.ink3} strokeWidth={1} />}
+              <text x={e.x + 9} y={e.y + 4} fontSize={12} fontFamily={FONT} fill={CHART.ink} style={{ fontVariantNumeric: "tabular-nums" }}>
+                <tspan fontWeight={600}>{e.s.label}</tspan>
+                {endValues && <tspan fill={CHART.ink2}>{` ${fmtInt(e.v)}`}</tspan>}
+                {partialLast && e.i === lastIdx && <tspan fill={CHART.ink3}>{` ${partialLast}`}</tspan>}
+              </text>
+            </g>
           ))}
           {/* hover */}
           {hover !== null && (
@@ -365,7 +383,16 @@ export function ColumnChart({
   xTickEvery,
   color = CHART.ink,
   highlight,
+  bands = [],
+  skip,
+  partialLast = false,
 }: {
+  /** Hatched bands (e.g. stream interrupted), x in ms. */
+  bands?: Band[];
+  /** Buckets not drawn (inside a band). */
+  skip?: boolean[];
+  /** Last bucket incomplete: drawn as an outline and labelled in the tooltip. */
+  partialLast?: boolean;
   xs: number[];
   values: number[];
   height?: number;
@@ -394,13 +421,33 @@ export function ColumnChart({
   const gap = slot > 6 ? 2 : slot > 3 ? 1 : 0;
   const bw = Math.min(14, Math.max(1, slot - gap));
   const sy = (v: number) => topPad + plotH - (v / top) * plotH;
+  const sxT = (t: number) => left + ((t - (xs[0] ?? 0)) / Math.max(1, bucketMs)) * slot;
   const every = xTickEvery ?? Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 90))));
-  void bucketMs;
 
   return (
     <div className="chart" ref={ref} style={{ height }}>
       {width > 0 && (
         <svg width={width} height={height} role="img" aria-label={ariaLabel}>
+          <defs>
+            <pattern id="hatch-c" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="6" stroke={CHART.rule} strokeWidth="1.5" />
+            </pattern>
+          </defs>
+          {bands.map((b, i) => {
+            const bx0 = Math.max(left, sxT(b.from) + slot);
+            const bx1 = Math.min(left + plotW, sxT(b.to));
+            if (bx1 - bx0 < 2) return null;
+            return (
+              <g key={`b${i}`}>
+                <rect x={bx0} y={topPad} width={bx1 - bx0} height={plotH} fill="url(#hatch-c)" />
+                {b.label && bx1 - bx0 > 110 && (
+                  <text x={(bx0 + bx1) / 2} y={topPad + 14} textAnchor="middle" fontSize={12} fill={CHART.ink2} fontFamily={FONT} stroke={CHART.surface} strokeWidth={4} style={{ paintOrder: "stroke" }}>
+                    {b.label}
+                  </text>
+                )}
+              </g>
+            );
+          })}
           {ticks.map((t) => (
             <g key={t}>
               <line x1={left} x2={left + plotW} y1={sy(t)} y2={sy(t)} stroke={CHART.rule} />
@@ -410,16 +457,21 @@ export function ColumnChart({
             </g>
           ))}
           {values.map((v, i) => {
+            if (skip?.[i]) return null;
             const x = left + i * slot + (slot - bw) / 2;
             const h = Math.max(v > 0 ? 1 : 0, topPad + plotH - sy(v));
+            const partial = partialLast && i === values.length - 1;
+            const fill = highlight?.(i) ? CHART.accent : color;
             return (
               <rect
                 key={i}
-                x={x}
-                y={topPad + plotH - h}
-                width={bw}
-                height={h}
-                fill={highlight?.(i) ? CHART.accent : color}
+                x={partial ? x + 0.5 : x}
+                y={topPad + plotH - h + (partial ? 0.5 : 0)}
+                width={partial ? Math.max(1, bw - 1) : bw}
+                height={partial ? Math.max(0, h - 0.5) : h}
+                fill={partial ? CHART.surface : fill}
+                stroke={partial ? fill : "none"}
+                strokeDasharray={partial ? "2 2" : undefined}
                 opacity={hover === null || hover === i ? 1 : 0.55}
               />
             );
@@ -460,7 +512,8 @@ export function ColumnChart({
         <div className="chart-tip" style={{ left: Math.min(Math.max(0, left + hover * slot + 12), width - 170), top: topPad }}>
           <div className="tip-t">{tipTitle(xs[hover])}</div>
           <div>
-            {fmtInt(values[hover])} {unit}
+            {skip?.[hover] ? "flux interrompu, pas de données" : `${fmtInt(values[hover])} ${unit}`}
+            {partialLast && hover === values.length - 1 ? " (en cours, incomplet)" : ""}
           </div>
         </div>
       )}

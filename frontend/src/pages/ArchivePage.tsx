@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, type Replay } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useTitle } from "../hooks/useTitle";
-import { fmtDay, fmtDayShort, fmtDayTimeUtc, fmtInt, fmtTime, fmtTimeUtc } from "../lib/format";
+import { fmtDay, fmtDayShort, fmtInt, fmtTime, fmtTimeUtc } from "../lib/format";
 import { LANG_ORDER, wikiUrl } from "../lib/lang";
 import { themePath } from "../lib/themes";
 import { WikiImage } from "../components/blocks";
@@ -63,6 +63,7 @@ export default function ArchivePage() {
   const art = usePolling((s) => (enTitle ? api.article("en", enTitle, s).catch(() => null) : Promise.resolve(null)), null, [enTitle]);
   const [log, setLog] = useState(false);
   const [full, setFull] = useState(false);
+  const [allHours, setAllHours] = useState(false);
   const r = st.data;
 
   if (!r) {
@@ -86,7 +87,6 @@ export default function ArchivePage() {
   const rows = buildPageviewRows(r.series, { start, end, full: true });
   const ordered = LANG_ORDER.map((l) => r.series.find((s) => s.lang === l)).filter((s): s is Replay["series"][number] => !!s);
   const thumb = ev.data?.thumbnail_url ?? art.data?.enrichment?.thumbnail_url ?? null;
-  const description = ev.data?.description ?? art.data?.enrichment?.description ?? null;
 
   return (
     <div>
@@ -100,7 +100,6 @@ export default function ArchivePage() {
           {headline(r)}
         </h1>
         <p className="standfirst">
-          {description ? `${description.charAt(0).toUpperCase()}${description.slice(1)}. ` : ""}
           Le {fmtDay(r.event.time)} à 22:11 UTC, un séisme de magnitude 6,8 (USGS) frappe la province d’Al Haouz, au sud de Marrakech. Voici, heure par heure, les
           lecteurs des articles qui lui sont consacrés sur Wikipédia.
         </p>
@@ -135,7 +134,7 @@ export default function ArchivePage() {
                 }
               />
               <ChartFrame
-                title={full ? "Toute la période (49 h) ; les heures non chargées restent vides" : "Heures chargées autour du séisme ; les heures non chargées restent vides"}
+                title={full ? "Toute la période, heures UTC" : "Heures chargées autour du séisme, heures UTC"}
                 aside={
                   <button type="button" className="btn-text t-12" onClick={() => setFull((v) => !v)}>
                     {full ? "Heures chargées seulement" : `Afficher les ${fmtInt(expected)} heures`}
@@ -154,11 +153,7 @@ export default function ArchivePage() {
                 L’article anglais a beaucoup plus de lecteurs que les articles français et arabe : l’échelle logarithmique permet de comparer la forme des trois
                 courbes.
               </p>
-            </section>
-            <aside className="stack-24">
-              <WikiImage eager url={thumb} lang="en" title="2023 Al Haouz earthquake" alt="Séisme d’Al Haouz, 2023" />
-              <PeaksTable r={r} />
-              <section>
+              <section style={{ marginTop: 32 }}>
                 <SectionHeader as="h3" title="Les articles comptés" thin />
                 <ul className="links-list">
                   {ordered.map((s) => (
@@ -167,20 +162,33 @@ export default function ArchivePage() {
                       <ExtLink href={s.url || wikiUrl(s.lang, s.title)}>
                         <LangText lang={s.lang}>{s.title}</LangText>
                       </ExtLink>
-                      <div className="t-12 muted" style={{ marginTop: 2 }}>
-                        Titre en 2023 : <LangText lang={s.lang}>{s.title_at_time}</LangText> · {fmtInt(s.titles_counted.length)}{" "}
+                      <span className="t-12 muted">
+                        {" "}
+                        · titre en 2023 : <LangText lang={s.lang}>{s.title_at_time}</LangText> · {fmtInt(s.titles_counted.length)}{" "}
                         {s.titles_counted.length > 1 ? "titres additionnés (redirections)" : "titre"}
-                      </div>
+                      </span>
                     </li>
                   ))}
                 </ul>
               </section>
+            </section>
+            <aside className="stack-24">
+              <WikiImage eager url={thumb} lang="en" title="2023 Al Haouz earthquake" alt="Séisme d’Al Haouz, 2023" />
+              <PeaksTable r={r} />
             </aside>
           </div>
 
           <section aria-labelledby="a-table">
-            <SectionHeader id="a-table" title="Les chiffres, heure par heure" right={`${fmtInt(rows.xs.length)} heures`} />
-            <div className="table-wrap scroll" style={{ maxHeight: 440 }}>
+            <SectionHeader
+              id="a-table"
+              title="Les chiffres, heure par heure"
+              right={
+                <button type="button" className="btn-text" onClick={() => setAllHours((v) => !v)}>
+                  {allHours ? "Heures chargées seulement" : `Afficher les ${fmtInt(rows.xs.length)} heures`}
+                </button>
+              }
+            />
+            <div className="table-wrap" style={{ overflow: "visible" }}>
               <table className="dt">
                 <thead>
                   <tr>
@@ -190,13 +198,14 @@ export default function ArchivePage() {
                         <LangCode lang={l} />
                       </th>
                     ))}
-                    <th className="r">Total</th>
+                    <th className="r hide-m">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.xs.map((t, i) => {
                     const vals = rows.langs.map((l) => rows.values[l][i]);
                     const loaded = vals.some((v) => v !== null);
+                    if (!allHours && !loaded) return null;
                     const isQuake = t === Math.floor(quake / HOUR) * HOUR;
                     return (
                       <tr key={t} className={isQuake ? "is-alert" : ""}>
@@ -221,7 +230,7 @@ export default function ArchivePage() {
                             )}
                           </td>
                         ))}
-                        <td className="r">{loaded ? fmtInt(vals.reduce<number>((a, v) => a + (v ?? 0), 0)) : "–"}</td>
+                        <td className="r hide-m">{loaded ? fmtInt(vals.reduce<number>((a, v) => a + (v ?? 0), 0)) : "–"}</td>
                       </tr>
                     );
                   })}
@@ -243,11 +252,9 @@ export default function ArchivePage() {
                 </p>
                 <p>
                   Pour chaque langue, on additionne les vues du titre utilisé en 2023, du titre actuel et de leurs redirections, car les vues d’une redirection sont
-                  comptées sous son propre nom. Une heure chargée sans ligne vaut zéro ; une heure non chargée reste vide.
+                  comptées sous son propre nom. Une heure chargée sans ligne vaut zéro ; une heure non chargée reste vide. <Link to="/methode">Méthode complète</Link>.
                 </p>
-                <p>
-                  Données de référence de l’événement : {fmtDayTimeUtc(r.event.time)}. <Link to="/methode">Méthode complète</Link>.
-                </p>
+
               </div>
             </div>
             <div />

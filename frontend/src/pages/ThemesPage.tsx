@@ -10,6 +10,7 @@ import { ChartFrame, LineChart, Sparkline } from "../components/charts";
 import { hourRange } from "../components/ReplayChart";
 import { firstNonZero } from "../lib/wikitext";
 import { EmptyState, ErrorState, Loading } from "../components/states";
+import { displayTitle } from "../components/EventItem";
 import { Coll, SectionHeader, SourceNote, StatusLabel } from "../components/text";
 
 function ThemesChart({ tl: raw }: { tl: ThemesTimeline }) {
@@ -19,14 +20,18 @@ function ThemesChart({ tl: raw }: { tl: ThemesTimeline }) {
   const trimmed = start > 0;
   const xs = tl.items.map((i) => new Date(i.t).getTime());
   const totals = tl.themes.map((t) => ({ ...t, sum: tl.items.reduce((a, i) => a + (i[t.id] ?? 0), 0) }));
-  const top = [...totals].filter((t) => t.sum > 0).sort((a, b) => b.sum - a.sum).slice(0, THEME_SERIES.length);
+  // Series 1–3 = the three most active real themes; "Autres" and everything else in grey.
+  const top = [...totals]
+    .filter((t) => t.sum > 0 && t.id !== "autres")
+    .sort((a, b) => b.sum - a.sum)
+    .slice(0, THEME_SERIES.length);
   const rest = totals.filter((t) => !top.some((x) => x.id === t.id));
   const nonClasse = tl.items.reduce((a, i) => a + (i.non_classe ?? 0), 0);
   if (!top.length) return <EmptyState>Aucune modification d’article classé sur les dernières {tl.hours} heures.</EmptyState>;
   const series = [
     ...top.map((t, k) => ({ key: t.id, label: t.label, color: THEME_SERIES[k], values: tl.items.map((i) => i[t.id] ?? 0) })),
     ...(rest.some((r) => r.sum > 0)
-      ? [{ key: "rest", label: "Thèmes restants", color: CHART.rest, strokeWidth: 1.5, values: tl.items.map((i) => rest.reduce((a, r) => a + (i[r.id] ?? 0), 0)) }]
+      ? [{ key: "rest", label: "Autres et thèmes restants", color: CHART.rest, strokeWidth: 1.5, values: tl.items.map((i) => rest.reduce((a, r) => a + (i[r.id] ?? 0), 0)) }]
       : []),
   ];
   return (
@@ -42,8 +47,9 @@ function ThemesChart({ tl: raw }: { tl: ThemesTimeline }) {
       <LineChart
         xs={xs}
         series={series}
-        height={280}
+        height={240}
         endValues={false}
+        partialLast="heure en cours"
         xFormat={(t) => fmtTimeUtc(t).replace(" UTC", "")}
         tipTitle={hourRange}
         unit="modifications"
@@ -57,6 +63,8 @@ export default function ThemesPage() {
   useTitle("Thèmes");
   const themes = usePolling((s) => api.themes(s), 60000);
   const tl = usePolling((s) => api.themesTimeline(24, s), 60000);
+  // Same source as the Données page for the classified-articles total.
+  const cls = usePolling((s) => api.classification(s).catch(() => null), 60000);
   const items = themes.data?.items ?? [];
   // The hourly sparkline only makes sense with at least 4 hours of data.
   const showTrend = items.some((t) => t.trend.length - firstNonZero(t.trend) >= 4);
@@ -70,15 +78,14 @@ export default function ThemesPage() {
       <header className="page-head">
         <h1 className="t-40">Thèmes</h1>
         <p className="standfirst">
-          Dix rubriques fixes. Chaque article reçoit un thème à partir de Wikidata, de ses catégories ou, à défaut, de mots-clés ; chaque événement prend le
-          thème de ses articles.
+          Dix rubriques fixes, attribuées à partir de Wikidata. <Link to="/methode#themes">Méthode →</Link>
         </p>
         {themes.data && (
           <p className="meta num">
             {totals.events
               ? `${plural(totals.events, "événement")}, ${totals.active ? `dont ${fmtInt(totals.active)} en cours` : "aucun en cours"}`
               : "Aucun événement détecté pour l’instant"} ·{" "}
-            {plural(totals.articles, "article classé", "articles classés")}
+            {cls.data ? plural(cls.data.total_articles, "article classé", "articles classés") : plural(totals.articles, "article classé", "articles classés")}
           </p>
         )}
       </header>
@@ -96,8 +103,8 @@ export default function ThemesPage() {
                     <tr>
                       <th>Thème</th>
                       <th className="r">Événements</th>
-                      <th className="r">En cours</th>
-                      <th className="r hide-m">Modifications</th>
+                      <th className="r hide-m">En cours</th>
+                      <th className="r">Modifications (24 h)</th>
                       <th className="r hide-m">Articles classés</th>
                       {showTrend && <th className="hide-m">Par heure</th>}
                       <th className="hide-m">Dernier événement</th>
@@ -113,9 +120,9 @@ export default function ThemesPage() {
                               {t.label}
                             </Link>
                           </td>
-                          <td className="r">{fmtInt(t.events)}</td>
-                          <td className={`r ${t.active_events > 0 ? "accent" : ""}`}>{fmtInt(t.active_events)}</td>
-                          <td className="r hide-m">{fmtInt(t.edits_24h)}</td>
+                          <td className="r">{t.events ? fmtInt(t.events) : <span className="faint">—</span>}</td>
+                          <td className="r hide-m">{t.active_events ? fmtInt(t.active_events) : <span className="faint">—</span>}</td>
+                          <td className="r">{fmtInt(t.edits_24h)}</td>
                           <td className="r hide-m">{fmtInt(t.articles)}</td>
                           {showTrend && (
                             <td className="hide-m">
@@ -129,7 +136,7 @@ export default function ThemesPage() {
                           <td className="hide-m" style={{ maxWidth: 280 }}>
                             {ev ? (
                               <>
-                                <Link to={eventPath(ev.id)}>{ev.title}</Link>{" "}
+                                <Link to={eventPath(ev.id)}>{displayTitle(ev)}</Link>{" "}
                                 <span className="t-12">
                                   <StatusLabel status={ev.status} />
                                 </span>

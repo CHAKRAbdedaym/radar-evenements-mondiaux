@@ -17,7 +17,7 @@ export function queryTerms(q: string): string[] {
 }
 
 /** Wraps every occurrence of the query terms in <mark> (case- and accent-insensitive). */
-export function highlight(text: string, q: string): ReactNode[] {
+export function highlight(text: string, q: string, maxMarks = 2): ReactNode[] {
   const terms = queryTerms(q).sort((a, b) => b.length - a.length);
   const chars = Array.from(text);
   if (!terms.length) return [text];
@@ -35,6 +35,12 @@ export function highlight(text: string, q: string): ReactNode[] {
       }
       if (ok) for (let j = 0; j < termArr.length; j++) marks[i + j] = true;
     }
+  }
+  // Keep only the first `maxMarks` highlighted runs (a list of repeated words is not more relevant).
+  let runs = 0;
+  for (let i = 0; i < marks.length; i++) {
+    if (marks[i] && (i === 0 || !marks[i - 1])) runs++;
+    if (marks[i] && runs > maxMarks) marks[i] = false;
   }
   const out: ReactNode[] = [];
   let buf = "";

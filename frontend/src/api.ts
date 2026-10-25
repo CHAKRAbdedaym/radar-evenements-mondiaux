@@ -176,6 +176,8 @@ export interface Article {
 export interface Enrichment {
   qid: string | null;
   description: string | null;
+  /** French Wikidata description, when it exists. */
+  description_fr?: string | null;
   thumbnail_url: string | null;
   categories: string[];
   instance_of: { qid: string; label: string | null }[];
@@ -199,6 +201,8 @@ export interface EventSummary {
   title: string;
   titles: Partial<Record<Lang, string>>;
   description: string | null;
+  /** Language of `description` ("fr" | "en" | "ar"), when the API knows it. */
+  description_lang?: Lang | null;
   thumbnail_url: string | null;
   first_seen: string | null;
   last_activity: string | null;

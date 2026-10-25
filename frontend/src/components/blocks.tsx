@@ -5,6 +5,20 @@ import { wikiName, wikiUrl } from "../lib/lang";
 import { cleanComment, isRevert, stripWikitext } from "../lib/wikitext";
 import { LangCode } from "./text";
 
+/** File page (author + licence) of a Wikimedia thumbnail: …/wikipedia/commons/thumb/a/ab/Name.jpg/500px-… */
+export function filePage(url: string): { name: string; href: string } | null {
+  const m = url.match(/\/wikipedia\/([a-z-]+)\/thumb\/[0-9a-f]\/[0-9a-f]{2}\/([^/]+)\//);
+  if (!m) return null;
+  let name = m[2];
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    /* keep raw */
+  }
+  const host = m[1] === "commons" ? "commons.wikimedia.org" : `${m[1]}.wikipedia.org`;
+  return { name: name.replace(/_/g, " "), href: `https://${host}/wiki/File:${encodeURIComponent(name.replace(/ /g, "_"))}` };
+}
+
 /** Upgrade a Wikimedia thumbnail URL to a larger standard width (falls back on error). */
 export function thumbAt(url: string, px: number): string {
   return url.replace(/\/(\d+)px-([^/]+)$/, `/${px}px-$2`);
@@ -23,8 +37,11 @@ export function WikiImage({
   ratio = true,
   className,
   eager = false,
+  credit = "full",
 }: {
   eager?: boolean;
+  /** "full" on lead / object pages (file page link), "none" in lists (credit kept in the title attribute). */
+  credit?: "full" | "none";
   url: string | null | undefined;
   lang?: Lang | null;
   title?: string | null;
@@ -41,6 +58,7 @@ export function WikiImage({
   // otherwise (lists): the photo stays out of the layout until it has arrived, so a slow or missing
   // Wikimedia thumbnail never leaves an empty grey box — the item simply closes up.
   const hidden = !eager && !loaded;
+  const file = filePage(url);
   return (
     <figure
       className={`fig ${ratio ? "ratio" : ""} ${className ?? ""}`}
@@ -50,6 +68,7 @@ export function WikiImage({
       <img
         src={src}
         alt={alt}
+        title={credit === "none" ? `Image : Wikimedia Commons${file ? `, ${file.name}` : ""}` : undefined}
         loading="eager"
         onLoad={() => setLoaded(true)}
         decoding="async"
@@ -59,17 +78,27 @@ export function WikiImage({
           else setFailed(true);
         }}
       />
-      <figcaption>
-        Image : Wikimedia Commons
-        {lang && title ? (
-          <>
-            , via{" "}
-            <a href={wikiUrl(lang, title)} target="_blank" rel="noreferrer" className="ext">
-              {wikiName(lang)}
-            </a>
-          </>
-        ) : null}
-      </figcaption>
+      {credit === "full" && (
+        <figcaption>
+          Image : Wikimedia Commons
+          {file ? (
+            <>
+              ,{" "}
+              <a href={file.href} target="_blank" rel="noreferrer" className="ext">
+                {file.name.length > 48 ? `${file.name.slice(0, 46)}…` : file.name}
+              </a>{" "}
+              (auteur et licence sur la page du fichier)
+            </>
+          ) : lang && title ? (
+            <>
+              , via{" "}
+              <a href={wikiUrl(lang, title)} target="_blank" rel="noreferrer" className="ext">
+                {wikiName(lang)}
+              </a>
+            </>
+          ) : null}
+        </figcaption>
+      )}
     </figure>
   );
 }
@@ -122,7 +151,8 @@ export function EditText({
 }) {
   const [open, setOpen] = useState(false);
   const a = stripWikitext(added);
-  const r = stripWikitext(removed);
+  const rRaw = stripWikitext(removed);
+  const r = rRaw.replace(/[\s–—\-.,;:|·]/g, "").length >= 2 ? rRaw : "";
   const revert = isRevert(comment);
   const long = a.length > 520 || r.length > 520;
   const dir = lang === "ar" ? "rtl" : "ltr";
@@ -140,7 +170,7 @@ export function EditText({
             {title}
           </>
         )}
-        {revert && " · Annulation"}
+
         {rev ? (
           <>
             {" · "}
@@ -151,7 +181,8 @@ export function EditText({
         ) : null}
       </p>
       {head}
-      {comment && (
+      {revert && <p className="qlabel" style={{ marginTop: 0 }}>Annulation</p>}
+      {cleanComment(comment) && (
         <p className="t-14 muted" style={{ marginBottom: 8 }}>
           Résumé : <bdi dir="auto">{cleanComment(comment)}</bdi>
         </p>
@@ -205,7 +236,8 @@ export function Choice<T extends string>({
   );
 }
 
-export function Pagination({ page, pages, onPage }: { page: number; pages: number; onPage: (p: number) => void }) {
+export function Pagination({ page, pages, onPage, maxPage }: { page: number; pages: number; onPage: (p: number) => void; maxPage?: number }) {
+  const last = maxPage ? Math.min(pages, maxPage) : pages;
   if (pages <= 1) return null;
   return (
     <nav className="pager" aria-label="Pagination">
@@ -217,9 +249,10 @@ export function Pagination({ page, pages, onPage }: { page: number; pages: numbe
         Page {fmtInt(page)} sur {fmtInt(pages)}
       </span>
       <span>·</span>
-      <button type="button" className="btn-text" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+      <button type="button" className="btn-text" disabled={page >= last} onClick={() => onPage(page + 1)}>
         Suivant ›
       </button>
+      {last < pages && <span className="faint">(consultation limitée aux {fmtInt(last)} premières pages)</span>}
     </nav>
   );
 }

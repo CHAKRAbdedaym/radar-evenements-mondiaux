@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api, type Edit, type Lang, type Timeline } from "../api";
 import { useNow, usePolling } from "../hooks/usePolling";
 import { useTitle } from "../hooks/useTitle";
-import { fmtInt, fmtSigned, fmtTime, fmtTimeUtc, fmtZ, plural } from "../lib/format";
+import { fmtInt, fmtSigned, fmtTime, fmtTimeSec, fmtTimeUtc, fmtZ, plural } from "../lib/format";
 import { LANG_CODE, LANG_ORDER } from "../lib/lang";
 import { LANG_COLOR } from "../styles/chart";
 import { AlertsTable } from "../components/AlertsTable";
@@ -21,6 +21,7 @@ function MinuteChart({ tl }: { tl: Timeline }) {
   const xs = items.map((p) => new Date(p.t).getTime());
   const langs = LANG_ORDER.filter((l) => items.some((p) => p[l] > 0));
   const total = items.reduce((a, p) => a + p.total, 0);
+  const small = langs.filter((l) => l !== "en" && Math.max(...items.map((p) => p[l])) < 10);
   return (
     <ChartFrame
       title={`Modifications par minute${first > 0 ? `, depuis ${fmtTimeUtc(xs[0])}` : ", 60 dernières minutes"}`}
@@ -28,6 +29,7 @@ function MinuteChart({ tl }: { tl: Timeline }) {
         <SourceNote>
           Wikimedia EventStreams, collection <Coll name="edits" /> (MongoDB). {fmtInt(total)} modifications sur la période.
           {first > 0 ? ` Pas de données avant ${fmtTimeUtc(xs[0])}.` : ""}
+          {small.length ? ` ${small.map((l) => LANG_CODE[l]).join(" et ")} : moins de 10 modifications par minute.` : ""} Dernier point en pointillé : minute en cours, incomplète.
         </SourceNote>
       }
     >
@@ -36,6 +38,7 @@ function MinuteChart({ tl }: { tl: Timeline }) {
           xs={xs}
           series={langs.map((l) => ({ key: l, label: LANG_CODE[l], color: LANG_COLOR[l], values: items.map((p) => p[l]), strokeWidth: 1.75 }))}
           height={240}
+          partialLast="minute en cours"
           xFormat={(t) => fmtTime(t)}
           tipTitle={(t) => `${fmtTimeUtc(t)}, 1 min`}
           unit="modifications"
@@ -67,7 +70,7 @@ function Feed({ lang, bots }: { lang: Lang | null; bots: boolean }) {
       <ul className="feed" aria-live="off">
         {st.data.items.map((e: Edit, i: number) => (
           <li key={e.id} className={`${fresh.has(e.id) ? "is-new" : ""} ${i >= 12 ? "m-extra" : ""}`}>
-            <span className="feed-t">{fmtTime(e.timestamp)}</span> <LangCode lang={e.lang} />{" "}
+            <span className="feed-t">{fmtTimeSec(e.timestamp)}</span> <LangCode lang={e.lang} />{" "}
             <ArticleLink lang={e.lang} title={e.title} className="hl" />
             <div className="t-12 muted" style={{ marginTop: 2 }}>
               <bdi>{e.user}</bdi>
@@ -94,8 +97,32 @@ export default function LivePage() {
   const radar = usePolling((s) => api.radar({ lang, includeBots: !hideBots }, s), 10000, [lang, hideBots]);
   const alerts = usePolling((s) => api.alerts({ lang, limit: 50 }, s), 30000, [lang]);
   const liveCut = now - 2 * 3600 * 1000;
-  const scored = useMemo(() => (radar.data?.items ?? []).slice(0, 25), [radar.data]);
-  const activeAlerts = (alerts.data?.items ?? []).filter((a) => new Date(a.window_end).getTime() >= liveCut).length;
+  const [allActive, setAllActive] = useState(false);
+  // Top 20 by z-score (unknown last), then modifications.
+  const sortedActive = useMemo(
+    () =>
+      [...(radar.data?.items ?? [])].sort((a, b) => {
+        const za = a.z_score ?? -Infinity;
+        const zb = b.z_score ?? -Infinity;
+        if (zb !== za) return zb - za;
+        return b.edits - a.edits;
+      }),
+    [radar.data],
+  );
+  const scored = allActive ? sortedActive : sortedActive.slice(0, 20);
+  // Alerts: newest window first, one row per (article, window).
+  const alertRows = useMemo(() => {
+    const seen = new Set<string>();
+    return [...(alerts.data?.items ?? [])]
+      .sort((a, b) => (a.window_end < b.window_end ? 1 : -1))
+      .filter((a) => {
+        const k = `${a.lang}:${a.title}:${a.window_end}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+  }, [alerts.data]);
+  const activeAlerts = alertRows.filter((a) => new Date(a.window_end).getTime() >= liveCut).length;
 
   return (
     <div>
@@ -150,7 +177,7 @@ export default function LivePage() {
                       </thead>
                       <tbody>
                         {scored.map((a, i) => (
-                          <tr key={`${a.lang}:${a.title}`} className={`${a.alert ? "is-alert" : ""} ${i >= 10 ? "m-extra" : ""}`}>
+                          <tr key={`${a.lang}:${a.title}`} className={`${a.alert ? "is-alert" : ""} ${i >= 10 && !allActive ? "m-extra" : ""}`}>
                             <td className="title-cell">
                               <span className="show-m">
                                 <LangCode lang={a.lang} />{" "}
@@ -167,14 +194,19 @@ export default function LivePage() {
                             <td className={`r ${a.alert ? "accent" : ""}`} title={a.baseline_type ? `base ${a.baseline_type}` : "historique insuffisant"}>
                               {a.z_score === null ? <span className="faint">–</span> : fmtZ(a.z_score)}
                             </td>
-                            <td className="hide-m muted">{a.theme_label ?? "non classé"}</td>
+                            <td className="hide-m muted theme-cell">{a.theme_label ?? "non classé"}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+                  {sortedActive.length > 20 && (
+                    <button type="button" className="btn-text" style={{ marginTop: 8 }} onClick={() => setAllActive((v) => !v)}>
+                      {allActive ? "Afficher les 20 premiers" : `Afficher les ${fmtInt(sortedActive.length - 20)} autres`}
+                    </button>
+                  )}
                   <SourceNote>
-                    collections <Coll name="edits" /> et <Coll name="scores" />. z-score : écart à l’activité habituelle de l’article (« – » = pas encore calculé).
+                    collections <Coll name="edits" /> et <Coll name="scores" />, triés par z-score. z-score : écart à l’activité habituelle de l’article (« – » = pas encore calculé).
                     Fenêtre terminée à <Timestamp iso={radar.data.time} />.
                   </SourceNote>
                 </>
@@ -192,12 +224,13 @@ export default function LivePage() {
           <SectionHeader
             id="l-alerts"
             title="Alertes du détecteur"
-            right={alerts.data ? `${plural(alerts.data.items.length, "alerte")}${activeAlerts ? `, dont ${fmtInt(activeAlerts)} des 2 dernières heures` : ""}` : null}
+            right={alerts.data ? `${plural(alertRows.length, "alerte")}${activeAlerts ? `, dont ${fmtInt(activeAlerts)} des 2 dernières heures` : ""}` : null}
           />
-          <p className="sh-note">
+          <p className="sh-note" style={{ maxWidth: "68ch" }}>
             Une alerte se déclenche quand un article reçoit en 5 minutes beaucoup plus de modifications que d’habitude (z-score supérieur à 3) par au moins 3
             contributeurs. Quatre modifications de trois personnes peuvent suffire : une alerte n’est pas forcément un événement mondial. Les alertes regroupées
-            par sujet forment les <Link to="/themes">événements</Link>.
+            par sujet forment les <Link to="/themes">événements</Link>. Sans historique, l’habitude de l’article vaut 0 : le z-score est alors plafonné par le
+            nombre de modifications.
           </p>
           {!alerts.data ? (
             alerts.error ? <ErrorState error={alerts.error} onRetry={alerts.refresh} retryMs={30000} /> : <Loading lines={8} />
@@ -205,7 +238,7 @@ export default function LivePage() {
             <EmptyState>Aucune alerte enregistrée.</EmptyState>
           ) : (
             <>
-              <AlertsTable alerts={alerts.data.items} showTheme liveCut={liveCut} scroll />
+              <AlertsTable alerts={alertRows} showTheme liveCut={liveCut} scroll />
               <SourceNote>
                 collection <Coll name="alerts" /> (MongoDB), les plus récentes d’abord. z-score en rouge : fenêtre des 2 dernières heures.
               </SourceNote>

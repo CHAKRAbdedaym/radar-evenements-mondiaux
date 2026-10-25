@@ -67,6 +67,19 @@ export const fmtDayTimeUtc = (iso: string | number | Date): string => `${dayFmt.
 
 /** "18:40" (UTC, no label). */
 export const fmtTime = (iso: string | number | Date): string => timeFmt.format(toDate(iso));
+/** "01:09:42" (UTC, no label). */
+export const fmtTimeSec = (iso: string | number | Date): string => timeSecFmt.format(toDate(iso));
+/** "16 oct." / "du 16 au 17 oct." / "du 30 sept. au 2 oct." (UTC). */
+export function fmtDayRange(a: string | number | Date, b: string | number | Date, withYear = false): string {
+  const da = toDate(a);
+  const db = toDate(b);
+  const f = withYear ? dayFmt : dayNoYearFmt;
+  const sa = f.format(da);
+  const sb = f.format(db);
+  if (sa === sb) return `le ${sa}`;
+  if (da.getUTCMonth() === db.getUTCMonth() && da.getUTCFullYear() === db.getUTCFullYear()) return `du ${da.getUTCDate()} au ${sb}`;
+  return `du ${sa} au ${sb}`;
+}
 /** "18:40 UTC". */
 export const fmtTimeUtc = (iso: string | number | Date): string => `${timeFmt.format(toDate(iso))} UTC`;
 export const fmtTimeSecUtc = (iso: string | number | Date): string => `${timeSecFmt.format(toDate(iso))} UTC`;

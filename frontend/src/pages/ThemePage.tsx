@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type EventSummary } from "../api";
 import { usePolling } from "../hooks/usePolling";
@@ -8,6 +9,7 @@ import { ChartFrame, ColumnChart } from "../components/charts";
 import { EventCompact, EventLead, EventStandard, isLeadEligible } from "../components/EventItem";
 import { hourRange } from "../components/ReplayChart";
 import { firstNonZero } from "../lib/wikitext";
+import { useStreamGaps } from "../lib/gaps";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { ArticleLink, Coll, LangCode, SectionHeader, SourceNote } from "../components/text";
 
@@ -17,6 +19,9 @@ function bySignificance(evs: EventSummary[]): EventSummary[] {
     const ea = isLeadEligible(a) ? 1 : 0;
     const eb = isLeadEligible(b) ? 1 : 0;
     if (ea !== eb) return eb - ea;
+    const la = a.status === "en cours" ? 1 : 0; // spec §4: prefer "en cours" for the lead
+    const lb = b.status === "en cours" ? 1 : 0;
+    if (la !== lb) return lb - la;
     return (b.significance ?? 0) - (a.significance ?? 0);
   });
 }
@@ -25,7 +30,7 @@ function ThemeTabs({ current }: { current: string }) {
   const themes = usePolling((s) => api.themes(s), null);
   if (!themes.data) return null;
   return (
-    <nav className="tabs tight" aria-label="Autres thèmes">
+    <nav className="tabs tight edge" aria-label="Autres thèmes">
       {themes.data.items.map((t) => (
         <Link key={t.id} to={themePath(t.id)} className={t.id === current ? "on" : ""} aria-current={t.id === current ? "page" : undefined}>
           {t.label}
@@ -37,6 +42,8 @@ function ThemeTabs({ current }: { current: string }) {
 
 export default function ThemePage() {
   const { id = "" } = useParams();
+  const [showAll, setShowAll] = useState(false);
+  const known = useStreamGaps();
   const st = usePolling((s) => api.theme(id, s), 60000, [id]);
   const d = st.data;
   useTitle(d ? d.label : "Thème");
@@ -73,6 +80,9 @@ export default function ThemePage() {
   const tStart = Math.min(d.timeline.length - 1, firstNonZero(d.timeline.map((p) => p.edits)));
   const timeline = d.timeline.slice(tStart);
   const xs = timeline.map((p) => new Date(p.t).getTime());
+  const refT = d.ref_time ? new Date(d.ref_time).getTime() : null;
+  const partialHour = refT !== null && xs.length > 0 && refT < xs[xs.length - 1] + 3600 * 1000;
+  const [allArts, setAllArts] = [showAll, setShowAll];
 
   return (
     <div>
@@ -131,30 +141,34 @@ export default function ThemePage() {
                     <thead>
                       <tr>
                         <th>Article</th>
-                        <th>Langue</th>
+                        <th className="lang-cell">Langue</th>
                         <th className="r">Modifications</th>
                         <th className="r hide-m">Contributeurs</th>
                         <th className="hide-m">Source du thème</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {d.top_articles.map((a) => (
+                      {(allArts ? d.top_articles : d.top_articles.slice(0, 10)).map((a) => (
                         <tr key={`${a.lang}:${a.title}`}>
                           <td className="title-cell">
                             <ArticleLink lang={a.lang} title={a.title} />
-                            {a.description && <div className="t-12 muted" style={{ marginTop: 2 }}>{a.description}</div>}
                           </td>
-                          <td>
+                          <td className="lang-cell">
                             <LangCode lang={a.lang} />
                           </td>
                           <td className="r">{fmtInt(a.edits_24h)}</td>
                           <td className="r hide-m">{fmtInt(a.distinct_users)}</td>
-                          <td className="hide-m muted">{themeSourceLabel(a.theme_source)}</td>
+                          <td className="hide-m muted nw">{themeSourceLabel(a.theme_source)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {d.top_articles.length > 10 && (
+                  <button type="button" className="btn-text" style={{ marginTop: 8 }} onClick={() => setAllArts(!allArts)}>
+                    {allArts ? "Afficher les 10 premiers" : `Afficher les ${fmtInt(d.top_articles.length)} articles`}
+                  </button>
+                )}
                 <SourceNote>
                   collections <Coll name="edits" /> et <Coll name="articles" /> (MongoDB), modifications humaines.
                 </SourceNote>
@@ -168,13 +182,19 @@ export default function ThemePage() {
                 title={tStart > 0 ? `Depuis ${fmtTimeUtc(xs[0])}` : "24 dernières heures, UTC"}
                 source={
                   <SourceNote>
-                    collection <Coll name="edits" />, articles de ce thème.{tStart > 0 ? ` Aucune modification enregistrée avant ${fmtTimeUtc(xs[0])} sur les 24 dernières heures.` : ""}
+                    collection <Coll name="edits" />, articles de ce thème.{tStart > 0
+                      ? known.gaps.some((g) => xs[0] - 3600 * 1000 >= g.from && xs[0] - 3600 * 1000 < g.to)
+                        ? ` Flux interrompu avant ${fmtTimeUtc(xs[0])} : aucune modification reçue, toutes pages confondues.`
+                        : ` Aucune modification de ce thème avant ${fmtTimeUtc(xs[0])} sur les 24 dernières heures.`
+                      : ""}
+                    {partialHour ? " Dernière barre en pointillé : heure en cours, incomplète." : ""}
                   </SourceNote>
                 }
               >
                 <ColumnChart
                   xs={xs}
                   values={timeline.map((p) => p.edits)}
+                  partialLast={partialHour}
                   bucketMs={3600000}
                   height={200}
                   xTickEvery={xs.length > 12 ? 6 : 1}

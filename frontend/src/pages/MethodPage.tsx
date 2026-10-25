@@ -1,10 +1,8 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { api } from "../api";
-import { usePolling } from "../hooks/usePolling";
 import { useTitle } from "../hooks/useTitle";
-import { fmtBytes, fmtDayTimeUtc, fmtInt } from "../lib/format";
 import { Coll, SourceNote } from "../components/text";
+import { Overview } from "./DataPage";
 
 const TOC = [
   ["probleme", "Le problème"],
@@ -109,45 +107,6 @@ function Diagram() {
         <p className="later">Phases suivantes : Kafka entre les services et la base, Spark pour les calculs, HDFS pour l’archivage des données brutes.</p>
       </div>
       <SourceNote>services Docker Compose du projet (docker-compose.yml).</SourceNote>
-    </figure>
-  );
-}
-
-function BaseTable() {
-  const st = usePolling((s) => api.stats(s), null);
-  const d = st.data;
-  if (!d) return <p className="t-14 muted">{st.error ? "Statistiques indisponibles (API injoignable)." : "Chargement des statistiques…"}</p>;
-  const rows = Object.entries(d.collections);
-  return (
-    <figure>
-      <div className="table-wrap">
-        <table className="dt">
-          <thead>
-            <tr>
-              <th>Collection</th>
-              <th className="r">Documents</th>
-              <th className="r">Taille</th>
-              <th className="r hide-m">Moyenne par document</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(([name, c]) => (
-              <tr key={name}>
-                <td>
-                  <code>{name}</code>
-                </td>
-                <td className="r">{fmtInt(c?.count)}</td>
-                <td className="r">{fmtBytes(c?.size_bytes)}</td>
-                <td className="r hide-m">{fmtBytes(c?.avg_doc_bytes)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <SourceNote>
-        <code>/api/stats</code> au {d.ref_time ? fmtDayTimeUtc(d.ref_time) : "–"} : {fmtBytes(d.db.data_size_bytes)} de données, {fmtBytes(d.db.index_size_bytes)} d’index,
-        modifications reçues depuis le {d.first_edit_at ? fmtDayTimeUtc(d.first_edit_at) : "–"}. Détail par collection : <Link to="/donnees">Données</Link>.
-      </SourceNote>
     </figure>
   );
 }
@@ -260,7 +219,10 @@ export default function MethodPage() {
           <Diagram />
 
           <h2 id="base">Ce que contient la base</h2>
-          <BaseTable />
+          <Overview />
+          <p className="t-14 muted" style={{ marginTop: 8 }}>
+            Le même tableau, avec chaque collection consultable document par document, est sur la page <Link to="/donnees">Données</Link>.
+          </p>
 
           <h2 id="limites">Limites</h2>
           <ul>

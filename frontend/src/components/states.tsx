@@ -32,7 +32,7 @@ export function ChartSkeleton({ height }: { height: number }) {
 
 function errorText(error: Error): string {
   if (error instanceof ApiError) {
-    if (error.status === 0) return "Impossible de charger les données (API indisponible).";
+    if (error.status === 0 || error.status === 502 || error.status === 503 || error.status === 504) return "Impossible de charger les données (API indisponible).";
     if (error.status === 404) return "Ces données n’existent pas encore dans l’API.";
     return `Impossible de charger les données (erreur ${error.status}).`;
   }
