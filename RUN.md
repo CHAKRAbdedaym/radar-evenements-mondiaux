@@ -176,7 +176,7 @@ En cas d’erreur réseau, le lot est **retenté plus tard** : un article n’es
 |---|---|---|
 | `docker compose run --rm enricher python -m radar_ingest.enricher --reclassify` | Reclasse **tous** les articles à partir du cache (utile après une modification de `themes_mapping.yaml`). Idempotent. Log : `reclassify done: N articles, M changed; theme_source before=… after=…` | Non |
 | `docker compose run --rm enricher python -m radar_ingest.themes --verify` | Vérifie que chaque identifiant Wikidata de `themes_mapping.yaml` correspond à son libellé Wikidata. Résultat du 25/10 : `verified 393 QIDs against Wikidata: 393 ok, 0 problem(s)`. Dure plusieurs minutes. | Oui (Wikidata, limité à 5 requêtes/s) |
-| `docker compose run --rm enricher python -m radar_ingest.enricher --backfill-descriptions` | Demande à Wikidata les descriptions française et anglaise des éléments en cache (50 par appel), pour les événements et les alertes d’abord. Idempotent. | Oui (Wikidata) |
+| `docker compose run --rm enricher python -m radar_ingest.enricher --backfill-descriptions` | Demande à Wikidata les descriptions française et anglaise des éléments mis en cache **avant** l’ajout des descriptions (50 par appel), événements et alertes d’abord. Idempotent. Inutile en temps normal : l’enricher récupère déjà les descriptions de chaque nouvel élément. | Oui (Wikidata) |
 
 **Attention au débit.** Le service `enricher` et une commande lancée à la main utilisent chacun leur propre limiteur : ensemble, ils dépasseraient les 5 requêtes par seconde demandées par Wikimedia. Pour `--verify` et `--backfill-descriptions`, **arrêter d’abord le service**, puis le relancer ensuite :
 

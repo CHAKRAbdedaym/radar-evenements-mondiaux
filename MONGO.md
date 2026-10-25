@@ -237,7 +237,7 @@ Un document par élément Wikidata (article ou classe). Exemple réel, classe «
 }
 ```
 
-Les champs `description_fr` et `description_en` sont ajoutés pour les éléments dont la description a été demandée (commande `--backfill-descriptions`, voir [`RUN.md`](RUN.md)). Environ 117 000 éléments sont en cache ; le cache sert aussi aux classes (P31, P279) qui ne sont pas des articles.
+Les champs `description_fr` et `description_en` sont remplis automatiquement par l’enricher pour chaque nouvel élément ; la commande `--backfill-descriptions` (voir [`RUN.md`](RUN.md)) n’a servi qu’une fois, pour les éléments mis en cache avant cet ajout. Environ 117 000 éléments sont en cache ; le cache sert aussi aux classes (P31, P279) qui ne sont pas des articles.
 
 ### `events` — un sujet réel, regroupé par qid (dérivé) — thèmes et événements
 
