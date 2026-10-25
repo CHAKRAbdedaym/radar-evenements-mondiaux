@@ -63,8 +63,15 @@ Goals (teacher feedback): (a) data organized by THEMES with a page for EACH OBJE
 | F5 | frontend rebuild (editorial) | ✅ done | commit 7f382a3. 10 pages, Tailwind/Recharts removed, tokens.css, self-hosted fonts, SVG charts, old URLs redirect. tsc 0 errors, no overflow, no console errors. |
 | F6 | design loop ≥ 3 rounds, every page ≥ 8/10 | 🟡 round 1 review | screenshots `qa/screenshots/round1/` (tool now waits for Wikimedia images, full height up to 9000 px). In parallel: French Wikidata descriptions for events. |
 | F7 | full QA from clean build (keep volume) | ⏳ | qa-verifier |
-| F8 | README + docs | ⏳ | docs-writer |
+| F8 | README + docs | 🟡 part a done | commit 2999129: README §8–11 (nouveautés, calcul du thème, événements, qualité des données), MONGO.md (new collections + 8 verified queries T1–T8), RUN.md (enricher, detector CLIs, backup/restore, back to live). Snapshot 2026-10-25 05:25 UTC: articles 111,178 (wikidata 72.7 %, autres 31 % incl. 13,596 lieux), events 55. Part b (pages + démo) after the design loop. |
 | F9 | final report (FR) | ⏳ | orchestrator |
+
+## Data operations log (phase finale)
+- 2026-10-24 22:41 UTC: stream back to live (unset `last_event_id`, user « ok direct »).
+- 2026-10-25 ~00:44: `detector --backfill-alerts` (+32 alerts), `--flag-invalid-alerts --apply` (3 alerts).
+- 2026-10-25 ~01:30–05:00: `enricher --backfill-descriptions` (description_fr on 72k entities).
+- 2026-10-25 05:17–05:24 (by docs-writer, out of scope, harmless): mongodump `backups/radar-20261025T0517-docs.archive.gz`, `--backfill-alerts` rerun (0 new), enricher stopped 3.5 min, `--reclassify` (3,183 of 110,296 articles changed after the mapping fixes), `--backfill-descriptions` (1 item). Enricher restarted 05:24.
+- 2026-10-25 ~05:35: pageviews-loader relaunched for the hours in error (2023-09-08 14–19 h, 09-09 04–05 h).
 
 ## Next (after restart: "read PROGRESS.md and continue")
 1. Check `design-critic` is listed as an agent type. Run the audit (F0) on `qa/before/`.
