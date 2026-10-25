@@ -218,7 +218,8 @@ class EventManager:
         query = {"kind": "detected", "$or": [
             {"_id": {"$in": sorted(touched)}}, {"last_activity": {"$gte": cut}},
             {"significance": {"$exists": False}}, {"theme_source": themes.SRC_UNKNOWN},
-            {"description_lang": {"$ne": "fr"}}]}
+            {"description_lang": {"$ne": "fr"}},
+            {"thumbnail_url": {"$ne": None}, "image_credit": None}]}
         n = 0
         for ev in list(evs.find(query)):
             try:
@@ -295,13 +296,15 @@ class EventManager:
         if not description:
             description, description_lang = next(((d["description"], lg) for lg in LANG_PREF for d in by_lang[lg]
                                                   if d.get("description")), (None, None))
-        thumb = next((d["thumbnail_url"] for lg in LANG_PREF for d in by_lang[lg] if d.get("thumbnail_url")), None)
+        thumb_doc = next((d for lg in LANG_PREF for d in by_lang[lg] if d.get("thumbnail_url")), None)
+        thumb = thumb_doc["thumbnail_url"] if thumb_doc else None
+        image_credit = (thumb_doc or {}).get("image_credit")   # author + licence of that very image
 
         status = "en cours" if last_activity >= _as_utc(ref) - self.active else "terminé"
         update = {
             "key": qid or ev["key"], "qid": qid, "theme": theme, "theme_source": tsrc, "theme_confidence": tconf,
             "titles": titles, "articles": arts, "description": description, "description_lang": description_lang, "thumbnail_url": thumb,
-            "first_seen": first_seen, "last_activity": last_activity, "peak_z": peak["z_score"],
+            "image_credit": image_credit, "first_seen": first_seen, "last_activity": last_activity, "peak_z": peak["z_score"],
             "peak_at": peak["window_end"], "langs": langs, "total_edits": total_edits, "distinct_users": users,
             "alerts_count": len(alerts), "alert_ids": [str(a["_id"]) for a in alerts], "spark": spark,
             "status": status, "significance": significance(peak["z_score"], users, len(langs)),
@@ -383,14 +386,16 @@ class EventManager:
                 description, description_lang = next(
                     ((adocs[f"{lg}:{REPLAY_TITLES[lg]}"]["description"], lg) for lg in LANG_PREF
                      if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("description")), (None, None))
-            thumb = next((adocs[f"{lg}:{REPLAY_TITLES[lg]}"]["thumbnail_url"] for lg in LANG_PREF
-                          if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("thumbnail_url")), None)
+            tdoc = next((adocs[f"{lg}:{REPLAY_TITLES[lg]}"] for lg in LANG_PREF
+                         if adocs.get(f"{lg}:{REPLAY_TITLES[lg]}", {}).get("thumbnail_url")), None)
+            thumb = tdoc["thumbnail_url"] if tdoc else None
+            image_credit = (tdoc or {}).get("image_credit")
             event = {
                 "key": qid, "qid": qid, "kind": "historique", "theme": "catastrophes",
                 "theme_source": res.source, "theme_confidence": res.confidence,
                 "titles": {lg: titles[lg] for lg in ("ar", "fr", "en")}, "articles": arts,
                 "description": description, "description_lang": description_lang, "thumbnail_url": thumb,
-                "first_seen": HIST_FIRST_SEEN,
+                "image_credit": image_credit, "first_seen": HIST_FIRST_SEEN,
                 "last_activity": active_hours[-1], "peak_z": None, "peak_at": peak_hour,
                 "peak_views": hours[peak_hour], "total_views": sum(hours.values()), "pageviews_hours": len(hours),
                 "langs": ["ar", "fr", "en"], "total_edits": 0, "distinct_users": 0, "alerts_count": 0,

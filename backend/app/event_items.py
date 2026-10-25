@@ -100,6 +100,7 @@ def event_summary(d: dict, cut: datetime) -> dict:
         "description": d.get("description"),
         "description_lang": d.get("description_lang"),
         "thumbnail_url": d.get("thumbnail_url"),
+        "image_credit": d.get("image_credit"),
         "first_seen": iso(d.get("first_seen")),
         "last_activity": iso(d.get("last_activity")),
         "peak_z": d.get("peak_z"),

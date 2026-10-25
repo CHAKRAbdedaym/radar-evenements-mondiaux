@@ -50,43 +50,36 @@ async def _build_snapshot(hours: int, detail: bool) -> dict:
                if detail else {}),
         }},
         {"$project": {"users": 0}},
-        {"$lookup": {
-            "from": "articles", "localField": "_aid", "foreignField": "_id", "as": "a",
-            "pipeline": [{"$project": {"theme": 1, "theme_source": 1, "qid": 1, "description": 1, "description_fr": 1,
-                                       "thumbnail_url": 1}}],
-        }},
-        {"$addFields": {"a": {"$first": "$a"}}},
-        {"$addFields": {"theme": {"$ifNull": ["$a.theme", NON_CLASSE]}}},
-        {"$facet": {
-            "hourly": [
-                {"$unwind": "$hours"},
-                {"$group": {"_id": {"theme": "$theme", "t": "$hours.t"}, "n": {"$sum": "$hours.n"}}},
-            ],
-            **({"top": [
-                {"$match": {"theme": {"$ne": NON_CLASSE}}},
-                {"$group": {"_id": "$theme", "articles": {"$topN": {
-                    "n": TOP_N,
-                    "sortBy": {"edits": -1, "distinct_users": -1},
-                    "output": {
-                        "lang": "$_id.lang", "title": "$_id.title", "edits_24h": "$edits",
-                        "distinct_users": "$distinct_users", "qid": "$a.qid",
-                        "description": "$a.description", "description_fr": "$a.description_fr", "thumbnail_url": "$a.thumbnail_url",
-                        "theme_source": "$a.theme_source",
-                    },
-                }}}},
-            ]} if detail else {}),
-        }},
     ]
-    res = await db.edits.aggregate(pipeline, allowDiskUse=True).to_list(1)
-    res = res[0] if res else {"hourly": [], "top": []}
-    res.setdefault("top", [])
+    rows = await db.edits.aggregate(pipeline, allowDiskUse=True).to_list(None)
+    # Themes are joined in Python with ONE primary-key query per 5,000 articles: a $lookup with a
+    # sub-pipeline cost ~10 s for 24k articles, this takes well under a second.
+    docs: dict = {}
+    keys = [r["_aid"] for r in rows]
+    proj = {"theme": 1, "theme_source": 1, "qid": 1, "description": 1, "description_fr": 1,
+            "thumbnail_url": 1, "image_credit": 1}
+    for i in range(0, len(keys), 5000):
+        async for d in db.articles.find({"_id": {"$in": keys[i:i + 5000]}}, proj):
+            docs[d["_id"]] = d
     index = {int(t.timestamp()): i for i, t in enumerate(buckets)}
     hourly: dict = {k: [0] * hours for k in THEME_IDS + [NON_CLASSE]}
-    for r in res["hourly"]:
-        i = index.get(int(r["_id"]["t"].timestamp()))
-        if i is not None and r["_id"]["theme"] in hourly:
-            hourly[r["_id"]["theme"]][i] += r["n"]
-    top = {r["_id"]: r["articles"] for r in res["top"]}
+    by_theme: dict = {}
+    for r in rows:
+        a = docs.get(r["_aid"])
+        theme = (a or {}).get("theme") or NON_CLASSE
+        if theme not in hourly:
+            theme = NON_CLASSE
+        for h in r["hours"]:
+            i = index.get(int(h["t"].timestamp()))
+            if i is not None:
+                hourly[theme][i] += h["n"]
+        if detail and theme != NON_CLASSE:
+            by_theme.setdefault(theme, []).append({
+                "lang": r["_id"]["lang"], "title": r["_id"]["title"], "edits_24h": r["edits"],
+                "distinct_users": r["distinct_users"], "qid": a.get("qid"), "description": a.get("description"),
+                "description_fr": a.get("description_fr"), "thumbnail_url": a.get("thumbnail_url"),
+                "image_credit": a.get("image_credit"), "theme_source": a.get("theme_source")})
+    top = {t: sorted(v, key=lambda x: (-x["edits_24h"], -x["distinct_users"]))[:TOP_N] for t, v in by_theme.items()}
     return {"ref_time": ref, "buckets": buckets, "hourly": hourly, "top": top}
 
 
@@ -180,5 +173,7 @@ async def classification() -> dict:
 
 async def warm() -> None:
     """Called once at startup (in the background): fills the caches before the first request."""
-    await asyncio.gather(snapshot(24), snapshot(168), articles_by_theme(), classification(),
-                         return_exceptions=True)
+    # the lightweight, most requested caches first (timeline, themes); the heavy classification last,
+    # so it does not compete with them for MongoDB
+    await asyncio.gather(snapshot(168), snapshot(24), articles_by_theme(), return_exceptions=True)
+    await asyncio.gather(classification(), return_exceptions=True)

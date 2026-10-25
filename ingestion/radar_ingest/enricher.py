@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote, unquote, urlparse
 from pymongo import ReplaceOne, UpdateMany, UpdateOne
 from pymongo.errors import PyMongoError
 
@@ -34,7 +36,9 @@ log = get_logger("enricher")
 STATUS_ID = "enricher"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIPEDIA_API = "https://{lang}.wikipedia.org/w/api.php"
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 SITES = "arwiki|frwiki|enwiki"
+CREDIT_POLL_SECONDS = 4        # one Commons call (<= 50 files) this often while credits are pending
 P0_POLL_SECONDS = 15          # look for new alert / event articles this often (priority 0 fast path)
 REQUEUE_SECONDS = 60          # rebuild the queue at least this often (new alerts / edits arrive all the time)
 MAX_CONTINUE = 12             # follow Wikipedia `continue` at most this many times per batch
@@ -244,6 +248,57 @@ def entity_label(doc: dict | None) -> str | None:
     return doc.get("label_fr") or doc.get("label_en")
 
 
+# ------------------------------------------------------------------ image credits
+def file_from_thumbnail(url: str):
+    """(project, file name) from a pageimages thumbnail URL, e.g.
+    .../wikipedia/commons/thumb/3/3e/Some_File.jpg/500px-Some_File.jpg -> ("commons", "Some File.jpg");
+    a path under /wikipedia/<lang>/ is a file local to that Wikipedia."""
+    parts = urlparse(url).path.split("/")
+    try:
+        if parts[1] != "wikipedia":
+            return None
+        project = parts[2]
+        name = parts[6] if parts[3] == "thumb" else parts[5]
+        return project, unquote(name).replace("_", " ")
+    except IndexError:
+        return None
+
+
+def _plain(html: str | None, limit: int = 80) -> str | None:
+    if not html:
+        return None
+    text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).split())
+    if not text:
+        return None
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def commons_credits(api: "Api", names: list[str]) -> dict[str, dict | None]:
+    """{file name: credit | None} for <= 50 Commons file names (None = not found on Commons)."""
+    data = api.get(COMMONS_API, {
+        "action": "query", "format": "json", "formatversion": 2, "prop": "imageinfo",
+        "iiprop": "extmetadata|url", "iiextmetadatafilter": "Artist|LicenseShortName|LicenseUrl|Credit",
+        "titles": "|".join("File:" + n for n in names)})
+    query = data.get("query", {})
+    norm = {n["from"]: n["to"] for n in query.get("normalized", [])}
+    by_title = {p.get("title"): p for p in query.get("pages", [])}
+    out = {}
+    for n in names:
+        title = norm.get("File:" + n, "File:" + n)
+        page = by_title.get(title)
+        info = (page or {}).get("imageinfo") or []
+        if not page or page.get("missing") or not info:
+            out[n] = None
+            continue
+        meta = info[0].get("extmetadata") or {}
+        val = lambda k: (meta.get(k) or {}).get("value")  # noqa: E731
+        out[n] = {"file": page["title"][5:], "artist": _plain(val("Artist")) or _plain(val("Credit")),
+                  "license": _plain(val("LicenseShortName"), 60), "license_url": val("LicenseUrl") or None,
+                  "file_page_url": "https://commons.wikimedia.org/wiki/File:" + quote(page["title"][5:].replace(" ", "_"), safe="_(),!'~-.:"),
+                  "source": "Wikimedia Commons"}
+    return out
+
+
 # ------------------------------------------------------------------- enricher
 class Enricher:
     def __init__(self):
@@ -260,6 +315,8 @@ class Enricher:
         self.queue: list[dict[str, deque]] = [defaultdict(deque) for _ in range(5)]
         self.retry: dict[str, tuple[float, int]] = {}   # key -> (not before monotonic, attempts)
         self.stats = Counter()
+        self._credit_todo: list[str] = []
+        self._credit_at = 0.0
         self.processed: set[str] = set()   # keys enriched since the last queue rebuild (skip queued duplicates)
         self.p0_seen: set[str] = set()     # keys already pushed by the priority-0 fast path
         self.ref_time: datetime | None = None
@@ -412,6 +469,82 @@ class Enricher:
         if added:
             log.info("priority 0 fast path: %d alert/event article(s) queued first", added)
         return added
+
+    # -- photo credits (author + licence) from Wikimedia Commons
+    def credit_candidates(self) -> list[str]:
+        """Article ids with a thumbnail and no `image_credit` yet: event / alert articles first, then
+        the most edited articles of the last 24 h (what /api/themes/{id} shows as top_articles)."""
+        db = self.db
+        keys: list[str] = []
+        for r in db["alerts"].aggregate([{"$match": {"invalid": {"$ne": True}}},
+                                         {"$group": {"_id": {"lang": "$lang", "title": "$title"}}}]):
+            keys.append(f"{r['_id']['lang']}:{r['_id']['title']}")
+        if "events" in db.list_collection_names():
+            for ev in db["events"].find({}, {"articles": 1, "titles": 1}):
+                keys += [f"{a['lang']}:{a['title']}" for a in ev.get("articles", [])]
+                keys += [f"{lg}:{t}" for lg, t in (ev.get("titles") or {}).items()]
+        ref = common.latest_event_time(db)
+        if ref is not None:
+            for r in db["edits"].aggregate([
+                    {"$match": {"bot": False, "timestamp": {"$gte": ref - timedelta(hours=24)}}},
+                    {"$group": {"_id": {"lang": "$lang", "title": "$title"}, "n": {"$sum": 1}}},
+                    {"$sort": {"n": -1}}, {"$limit": 600}]):
+                keys.append(f"{r['_id']['lang']}:{r['_id']['title']}")
+        keys = list(dict.fromkeys(keys))
+        need = {d["_id"] for i in range(0, len(keys), 500) for d in self.articles.find(
+            {"_id": {"$in": keys[i:i + 500]}, "thumbnail_url": {"$ne": None}, "image_credit": {"$exists": False}}, {"_id": 1})}
+        return [k for k in keys if k in need]
+
+    def credits_step(self) -> int:
+        """Resolve credits for up to 50 files (one Commons call); the cache collection `image_credits`
+        guarantees a file is never fetched twice."""
+        if not self._credit_todo and time.monotonic() - self._credit_at > 60:
+            self._credit_todo = self.credit_candidates()
+            self._credit_at = time.monotonic()
+        if not self._credit_todo:
+            return 0
+        ids, self._credit_todo = self._credit_todo[:200], self._credit_todo[200:]
+        arts = {d["_id"]: d["thumbnail_url"] for d in self.articles.find({"_id": {"$in": ids}}, {"thumbnail_url": 1})}
+        files = {}
+        for aid, url in arts.items():
+            ref = file_from_thumbnail(url)
+            if ref:
+                files[aid] = ref
+            else:
+                self.articles.update_one({"_id": aid}, {"$set": {"image_credit": None}})
+        cache = {d["_id"]: d["credit"] for d in self.db["image_credits"].find(
+            {"_id": {"$in": [f"{p}:{n}" for p, n in files.values()]}})}
+        need = sorted({n for p, n in files.values() if p == "commons" and f"{p}:{n}" not in cache})[:50]
+        if need:
+            try:
+                for n, credit in commons_credits(self.api, need).items():
+                    cache[f"commons:{n}"] = credit
+                    self.db["image_credits"].replace_one({"_id": f"commons:{n}"},
+                                                         {"_id": f"commons:{n}", "credit": credit, "fetched_at": utcnow()}, upsert=True)
+            except ApiError as exc:
+                log.error("commons credits failed, will retry: %s", exc)
+                self._credit_todo = ids + self._credit_todo
+                return 0
+            # files beyond this call's 50 stay pending for the next call
+            self._credit_todo = [a for a, (p, n) in files.items() if p == "commons" and f"commons:{n}" not in cache] \
+                + self._credit_todo
+        done = 0
+        for aid, (project, name) in files.items():
+            if project == "commons":
+                if f"commons:{name}" not in cache:
+                    continue
+                credit = cache[f"commons:{name}"]
+            else:  # a file local to one Wikipedia: no Commons metadata
+                lang = project if project in LANGS else aid.split(":", 1)[0]
+                credit = {"file": name, "artist": None, "license": None, "license_url": None,
+                          "file_page_url": f"https://{lang}.wikipedia.org/wiki/File:{quote(name.replace(' ', '_'))}",
+                          "source": "Wikipédia (fichier local)"}
+            self.articles.update_one({"_id": aid}, {"$set": {"image_credit": credit}})
+            done += 1
+        if done:
+            log.info("image credits: %d article(s) updated (%d Commons file(s) fetched, %d pending)",
+                     done, len(need), len(self._credit_todo))
+        return done
 
     def queue_sizes(self) -> list[int]:
         return [sum(len(d) for d in q.values()) for q in self.queue]
@@ -588,7 +721,7 @@ class Enricher:
         self.api = Api(self.rate)
         self.ensure_indexes()
         log.info("enricher started: batch=%d rate<=%.1f/s refresh=%d d", self.batch_size, self.rate, self.refresh_days)
-        last_rebuild = last_p0 = 0.0
+        last_rebuild = last_p0 = last_credit = 0.0
         while not STOP.is_set():
             try:
                 if time.monotonic() - last_rebuild > REQUEUE_SECONDS or not sum(self.queue_sizes()):
@@ -597,6 +730,14 @@ class Enricher:
                 if time.monotonic() - last_p0 > P0_POLL_SECONDS:
                     self.refresh_p0()
                     last_p0 = time.monotonic()
+                if time.monotonic() - last_credit > CREDIT_POLL_SECONDS:
+                    try:
+                        self.credits_step()
+                    except Stopped:
+                        break
+                    except (ApiError, PyMongoError) as exc:
+                        log.error("credits step failed: %s", exc)
+                    last_credit = time.monotonic()
                 batch = self.next_batch()
                 if batch is None:
                     self.checkpoint()

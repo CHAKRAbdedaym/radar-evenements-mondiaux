@@ -17,6 +17,12 @@ from app.routers import (alerts, articles, edits, events, explorer, frontpage, h
 async def lifespan(_: FastAPI):
     """Warm the theme caches in the background and keep them fresh (stale-while-revalidate)."""
     swr.start()
+    # the timeline cache is filled BEFORE the server accepts requests (a few seconds), so the first call
+    # after a restart is already warm; the other theme caches warm up in the background
+    try:
+        await asyncio.gather(theme_stats.snapshot(168), theme_stats.snapshot(24))
+    except Exception:  # noqa: BLE001 - never block startup on a slow database
+        pass
     warm = asyncio.create_task(theme_stats.warm())
     yield
     warm.cancel()

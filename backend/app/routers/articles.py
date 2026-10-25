@@ -82,12 +82,27 @@ async def article(lang: str, title: str):
         } for d in texts_r],
         "alerts": [alert_item(d) for d in alerts_r],
         "pageviews_count": pv_count,
-        "enrichment": _enrichment(art_doc),
+        "enrichment": await _enrichment(art_doc),
         "events": [event_summary(d, cut) for d in ev_docs],
     }
 
 
-def _enrichment(d: Optional[dict]) -> Optional[dict]:
+async def _with_labels(items: list) -> list:
+    """French label when Wikidata has one, else English; `label_lang` tells the UI which one it got."""
+    qids = [x["qid"] for x in items if x.get("qid")]
+    ents = {e["_id"]: e async for e in db.wikidata_entities.find({"_id": {"$in": qids}}, {"label_fr": 1, "label_en": 1})}
+    out = []
+    for x in items:
+        e = ents.get(x.get("qid"), {})
+        fr, en = e.get("label_fr"), e.get("label_en")
+        if fr:
+            out.append({**x, "label": fr, "label_lang": "fr"})
+        else:
+            out.append({**x, "label": en or x.get("label"), "label_lang": "en" if (en or x.get("label")) else None})
+    return out
+
+
+async def _enrichment(d: Optional[dict]) -> Optional[dict]:
     if not d:
         return None
     return {
@@ -95,9 +110,10 @@ def _enrichment(d: Optional[dict]) -> Optional[dict]:
         "description": d.get("description"),
         "description_fr": d.get("description_fr"),
         "thumbnail_url": d.get("thumbnail_url"),
+        "image_credit": d.get("image_credit"),
         "categories": d.get("categories") or [],
-        "instance_of": d.get("instance_of") or [],
-        "occupations": d.get("occupations") or [],
+        "instance_of": await _with_labels(d.get("instance_of") or []),
+        "occupations": await _with_labels(d.get("occupations") or []),
         "death_date": iso(d.get("death_date")),
         "theme": d.get("theme"),
         "theme_label": label(d.get("theme")),

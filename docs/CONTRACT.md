@@ -1,7 +1,7 @@
 # CONTRACT — Radar d'événements mondiaux
 
 > Single source of truth for every subagent. Owned by the orchestrator. **Do not change it yourself**: report needed changes.
-> Version 2.1 (v2.1 = events.significance / lead_eligible + /api/frontpage). Version 2.0 (final phase: themes, `articles`, `events`, new endpoints, editorial redesign). Changes vs 1.2 are marked **(v2)**.
+> Version 2.3 (v2.3 = description_fr / description_lang, image_credit + image_credits cache, label_lang; v2.2 = invalid alerts). Version 2.1 (v2.1 = events.significance / lead_eligible + /api/frontpage). Version 2.0 (final phase: themes, `articles`, `events`, new endpoints, editorial redesign). Changes vs 1.2 are marked **(v2)**.
 
 ## 1. Repository layout
 
@@ -224,6 +224,16 @@ Indexes: `{source:1,hour:1}`.
 }
 ```
 Indexes: `{theme:1}`, `{qid:1}`, `{theme_source:1}`, `{enriched_at:1}`, `{lang:1,theme:1}`.
+**(v2.3)** Optional fields: `description_fr` (Wikidata French description, null if none); `image_credit` (resolved for event/alert articles first, then the most edited articles):
+```json
+"image_credit": {"file": "…", "artist": "…|null", "license": "CC BY-SA 4.0|null", "license_url": "…|null",
+                 "file_page_url": "https://commons.wikimedia.org/wiki/File:…",
+                 "source": "Wikimedia Commons" | "Wikipédia (fichier local)"} | null
+```
+`instance_of[]` / `occupations[]` items carry `label_lang` ("fr"|"en") in the API enrichment (French label when Wikidata has one).
+
+### 5.7b `image_credits` (v2.3) — cache of Commons file metadata
+`{_id: "commons:{file name}", file, artist, license, license_url, file_page_url, source, fetched_at}`. A file is never fetched twice.
 
 ### 5.8 `wikidata_entities` (v2) — cache so no Wikidata item is fetched twice
 ```json
@@ -247,6 +257,8 @@ An event = one real-world topic, grouped across languages by Wikidata qid (key =
   "titles": {"ar": "…", "fr": "…", "en": "…"},          // from wikidata sitelinks (+ alerted titles); missing langs omitted
   "articles": [{"lang": "en", "title": "…"}],           // the articles that raised alerts (unique)
   "description": "…", "thumbnail_url": "…",              // from the best article (en > fr > ar if several), may be null
+  "description_lang": "fr",       // (v2.3) "fr" when the Wikidata French description is used, else the article's own language
+  "image_credit": { /* (v2.3) same shape as articles.image_credit, from the best article */ },
   "first_seen": ISODate,          // window_start of the first alert
   "last_activity": ISODate,       // latest non-bot edit on any of the event's articles (event time)
   "peak_z": 7.9, "peak_at": ISODate,   // max alert z_score and its window_end

@@ -10,7 +10,7 @@ from app.util import bad, iso
 router = APIRouter(prefix="/themes", tags=["themes"])
 
 TOP_KEYS = ("lang", "title", "edits_24h", "distinct_users", "qid", "description", "description_fr", "thumbnail_url",
-            "theme_source")
+            "image_credit", "theme_source")
 
 
 async def _events_by_theme(cut) -> dict:
