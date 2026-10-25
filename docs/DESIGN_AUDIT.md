@@ -172,4 +172,23 @@ States (9) are mostly not visible in these screenshots. I scored them from the o
 
 ## After (redesign)
 
-_to be filled after the redesign_
+Screenshots: before `qa/before/`, after `qa/after/` (= round 3, desktop 1440 + mobile 390, incl. loading/error/empty states).
+
+| Page | Before | Round 1 | Round 2 |
+|---|---|---|---|
+| À la une (was Radar) | 3 | 6 | 7 |
+| Événement | — | 5.5 | 7 |
+| Événement Al Haouz | — | 7 | 8 |
+| Thèmes | — | 6.5 | 7 |
+| Thème (Sport) | — | 5.5 | 6.5 |
+| Données (was Explorateur) | 3.5 | 7 | 7.5 |
+| En direct (was Alertes) | 2.5 | 7 | 7.5 |
+| Archives : Al Haouz (was Rejouer) | 4.5 | 7.5 | 8 |
+| Recherche | 3 | 6 | 6.5 |
+| Méthode (was Projet) | 3 | 7 | 7 |
+| Article | 3 | 5.5 | 6.5 |
+| **Average** | **3** | **6.3** | **7.1** |
+
+All round-2 fixes were applied afterwards (round 3 screenshots = `qa/after/`); round 3 was not re-scored (the user asked to stop the review loop to save time). Reviews: `qa/screenshots/round1/REVIEW.md`, `qa/screenshots/round2/REVIEW.md`.
+
+What changed: dark navy/cyan/orange theme, glows, rounded panels, emojis, stat tiles, sidebar and animated radar scope removed → paper/ink palette, Newsreader + IBM Plex, hairline rules, one red accent, horizontal news-site navigation, real Commons photos with credits, French copy, organisation by themes with one page per event and per article.
