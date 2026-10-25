@@ -1,14 +1,20 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, ApiError, type Article, type EditText, type Lang } from "../api";
+import { api, ApiError, type Article, type Lang } from "../api";
 import { usePolling } from "../hooks/usePolling";
-import { fmtDateTimeUtc, fmtDec1, fmtInt, fmtShortDateTime, fmtTimeUtc } from "../lib/format";
-import { LANG_NAME, dirOf, isLang, wikiDiffUrl, wikiUrl } from "../lib/lang";
-import { AXIS, GRID, TooltipCard } from "../components/charts";
-import { BaselineBadge, DeltaBytes, Empty, ErrorState, LangBadge, Loading, Panel, StaleBanner, StatTile, TimeAgo } from "../components/ui";
+import { useTitle } from "../hooks/useTitle";
+import { fmtDay, fmtDayTimeUtc, fmtInt, fmtSigned, fmtTime, fmtTimeUtc, plural } from "../lib/format";
+import { LANG_NAME, dirOf, isLang, wikiName, wikiUrl } from "../lib/lang";
+import { themePath, themeSourceSentence } from "../lib/themes";
+import { cleanComment, isRevert } from "../lib/wikitext";
+import { AlertsTable } from "../components/AlertsTable";
+import { EditText, FactBox, WikiImage } from "../components/blocks";
+import { ChartFrame, ColumnChart } from "../components/charts";
+import { EventCompact } from "../components/EventItem";
+import { EmptyState, ErrorState, Loading } from "../components/states";
+import { Coll, ExtLink, Kicker, LangCode, MetaLine, SectionHeader, SourceNote, Timestamp } from "../components/text";
 
-const BUCKET_MS = 5 * 60 * 1000;
+const BUCKET = 5 * 60 * 1000;
 
 function safeDecode(s: string): string {
   try {
@@ -18,7 +24,7 @@ function safeDecode(s: string): string {
   }
 }
 
-/** Reads lang + title from the raw (still encoded) pathname, so titles containing "/" survive. */
+/** lang + title from the raw (still encoded) pathname, so titles containing "/" survive. */
 function useArticleParams(): { lang: string; title: string } {
   const { pathname } = useLocation();
   const m = pathname.match(/^\/article\/([^/]+)\/(.+)$/);
@@ -26,272 +32,289 @@ function useArticleParams(): { lang: string; title: string } {
   return { lang: m[1], title: safeDecode(m[2]).replace(/_/g, " ").trim() };
 }
 
-function LongText({ text, lang, kind }: { text: string; lang: Lang; kind: "added" | "removed" }) {
-  const [open, setOpen] = useState(false);
-  const LIMIT = 420;
-  const long = text.length > LIMIT;
-  const shown = open || !long ? text : `${text.slice(0, LIMIT)}…`;
-  const added = kind === "added";
+function EditsChart({ a }: { a: Article }) {
+  const data = useMemo(() => {
+    const map = new Map(a.timeline.map((p) => [new Date(p.t).getTime(), p.edits]));
+    const keys = [...map.keys()].sort((x, y) => x - y);
+    if (!keys.length) return { xs: [] as number[], vs: [] as number[] };
+    const xs: number[] = [];
+    const last = keys[keys.length - 1];
+    const first = Math.min(keys[0], last - 35 * BUCKET); // at least 3 h so a few edits do not become wide blocks
+    for (let t = first; t <= last; t += BUCKET) xs.push(t);
+    return { xs, vs: xs.map((t) => map.get(t) ?? 0) };
+  }, [a.timeline]);
+  const alertWindows = a.alerts.map((al) => [new Date(al.window_start).getTime(), new Date(al.window_end).getTime()]);
+  const total = data.vs.reduce((s, v) => s + v, 0);
+  if (!data.xs.length)
+    return (
+      <EmptyState reason={a.stats.last_edit ? `Dernière modification : ${fmtDayTimeUtc(a.stats.last_edit)}.` : undefined}>Aucune modification ces dernières 24 heures.</EmptyState>
+    );
   return (
-    <div
-      className={`rounded-lg border-l-2 px-3 py-2 text-[13.5px] leading-relaxed ${
-        added ? "border-plus bg-plus/[0.07] text-[#CFF5DF]" : "border-minus bg-minus/[0.07] text-[#F6C4C4]"
-      }`}
+    <ChartFrame
+      title={`Modifications par tranche de 5 min, de ${fmtTimeUtc(data.xs[0]).replace(" UTC", "")} à ${fmtTimeUtc(data.xs[data.xs.length - 1] + BUCKET)}${alertWindows.length ? " ; en rouge, les fenêtres d’alerte" : ""}`}
+      source={
+        <SourceNote>
+          collection <Coll name="edits" /> (MongoDB), robots compris, 24 dernières heures : {plural(total, "modification")}.
+        </SourceNote>
+      }
     >
-      <p className="mb-1 font-mono text-[10.5px] uppercase tracking-wider opacity-80">{added ? "+ texte ajouté" : "− texte retiré"}</p>
-      <p dir={dirOf(lang)} className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${added ? "" : "line-through decoration-minus/60"} ${lang === "ar" ? "font-arabic" : ""}`}>
-        {shown}
-      </p>
-      {long && (
-        <button className="mt-1 font-mono text-[11px] text-cyan hover:underline" onClick={() => setOpen((v) => !v)}>
-          {open ? "Réduire" : `Afficher tout (${fmtInt(text.length)} caractères)`}
+      <ColumnChart
+        xs={data.xs}
+        values={data.vs}
+        bucketMs={BUCKET}
+        height={180}
+        xFormat={(t) => fmtTime(t)}
+        tipTitle={(t) => `${fmtDay(t)}, ${fmtTime(t)}–${fmtTimeUtc(t + BUCKET)}`}
+        unit="modifications"
+        ariaLabel={`${plural(total, "modification")} sur 24 heures.`}
+        highlight={(i) => alertWindows.some(([s, e]) => data.xs[i] >= s - BUCKET && data.xs[i] < e)}
+      />
+    </ChartFrame>
+  );
+}
+
+function EditsTable({ a }: { a: Article }) {
+  const [all, setAll] = useState(false);
+  const rows = all ? a.edits : a.edits.slice(0, 15);
+  return (
+    <>
+      <div className="table-wrap">
+        <table className="dt">
+          <thead>
+            <tr>
+              <th>Heure</th>
+              <th>Contributeur</th>
+              <th className="r">Octets</th>
+              <th className="hide-m">Résumé</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={e.id}>
+                <td className="nw">{fmtDayTimeUtc(e.timestamp)}</td>
+                <td className="break">
+                  <bdi>{e.user}</bdi>
+                  {e.bot ? <span className="muted"> (robot)</span> : ""}
+                </td>
+                <td className="r">{fmtSigned(e.delta_bytes)}</td>
+                <td className="hide-m muted" style={{ maxWidth: 360 }}>
+                  {isRevert(e.comment) ? "Annulation · " : ""}
+                  <bdi dir="auto">{cleanComment(e.comment) || "–"}</bdi>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {a.edits.length > 15 && (
+        <button type="button" className="btn-text" style={{ marginTop: 8 }} onClick={() => setAll((v) => !v)}>
+          {all ? "Afficher moins" : `Afficher les ${fmtInt(a.edits.length)} dernières modifications`}
         </button>
+      )}
+      <SourceNote>
+        collection <Coll name="edits" />, Wikimedia EventStreams.
+      </SourceNote>
+    </>
+  );
+}
+
+function Why({ a }: { a: Article }) {
+  const en = a.enrichment;
+  if (!en) return <p className="t-14 muted">Cet article n’a pas encore été classé par l’enrichisseur (Wikipédia + Wikidata).</p>;
+  return (
+    <div className="stack-8">
+      <p className="t-14">{themeSourceSentence(en.theme_source, en.theme_confidence)}</p>
+      {en.theme_reason && (
+        <p className="t-14 muted">
+          Règle appliquée : <span className="mono" style={{ fontSize: 12.5 }}>{en.theme_reason}</span>
+        </p>
+      )}
+      {en.instance_of.length > 0 && (
+        <p className="t-14 muted">
+          Nature (Wikidata P31) : {en.instance_of.map((i) => i.label ?? i.qid).join(", ")}
+        </p>
+      )}
+      {en.occupations.length > 0 && <p className="t-14 muted">Métier (P106) : {en.occupations.map((i) => i.label ?? i.qid).join(", ")}</p>}
+      {en.categories.length > 0 && (
+        <p className="t-14 muted">
+          Catégories : {en.categories.slice(0, 8).join(" · ")}
+          {en.categories.length > 8 ? ` (et ${fmtInt(en.categories.length - 8)} autres)` : ""}
+        </p>
       )}
     </div>
   );
 }
 
-function TextItem({ t, lang }: { t: EditText; lang: Lang }) {
-  const empty = !t.added_text && !t.removed_text;
-  return (
-    <li className="border-b border-line/70 py-4 last:border-0">
-      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
-        <span className="num text-ink-2">{fmtDateTimeUtc(t.timestamp)}</span>
-        <a className="link font-mono" href={wikiDiffUrl(lang, t.rev_new)} target="_blank" rel="noreferrer">
-          révision {t.rev_new} ↗
-        </a>
-        {t.comment && (
-          <span className="min-w-0 truncate italic">
-            « <bdi>{t.comment}</bdi> »
-          </span>
-        )}
-      </div>
-      <div className="space-y-2">
-        {t.added_text && <LongText text={t.added_text} lang={lang} kind="added" />}
-        {t.removed_text && <LongText text={t.removed_text} lang={lang} kind="removed" />}
-        {empty && <p className="text-xs text-ink-3">Modification sans texte visible (mise en forme, liens ou modèles).</p>}
-      </div>
-    </li>
-  );
-}
-
-function EditsTimeline({ a }: { a: Article }) {
-  const data = useMemo(() => {
-    if (!a.timeline.length) return [];
-    const map = new Map(a.timeline.map((p) => [new Date(p.t).getTime(), p.edits]));
-    const keys = [...map.keys()].sort((x, y) => x - y);
-    const out: { ts: number; edits: number }[] = [];
-    const start = keys[0];
-    const end = keys[keys.length - 1];
-    if ((end - start) / BUCKET_MS > 300) return keys.map((k) => ({ ts: k, edits: map.get(k)! }));
-    for (let t = start; t <= end; t += BUCKET_MS) out.push({ ts: t, edits: map.get(t) ?? 0 });
-    return out;
-  }, [a.timeline]);
-  if (!data.length) return <Empty>Aucune modification de cet article sur les dernières 24 h.</Empty>;
-  return (
-    <div className="h-56">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
-          <CartesianGrid {...GRID} />
-          <XAxis dataKey="ts" tickFormatter={(v) => fmtShortDateTime(v)} minTickGap={50} {...AXIS} />
-          <YAxis allowDecimals={false} {...AXIS} width={44} />
-          <Tooltip
-            cursor={{ fill: "rgba(63,208,201,0.08)" }}
-            content={({ active, payload }) =>
-              active && payload?.length ? (
-                <TooltipCard
-                  title={`${fmtShortDateTime((payload[0].payload as { ts: number }).ts)} UTC (tranche de 5 min)`}
-                  rows={[{ key: "e", label: "Modifications", color: "#3FD0C9", value: payload[0].value as number }]}
-                />
-              ) : null
-            }
-          />
-          <Bar dataKey="edits" fill="#3FD0C9" fillOpacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-function PageviewsChart({ lang, title }: { lang: Lang; title: string }) {
-  const pv = usePolling((s) => api.pageviews(lang, title, undefined, s), null, [lang, title]);
-  if (!pv.data) return pv.error ? <ErrorState error={pv.error} onRetry={pv.refresh} /> : <Loading rows={3} />;
-  const data = pv.data.items.map((p) => ({ ts: new Date(p.hour).getTime(), views: p.views }));
-  if (!data.length) return <Empty>Pas de vues horaires chargées pour cet article.</Empty>;
-  return (
-    <>
-      <p className="mb-2 text-xs text-ink-3">
-        {fmtInt(data.length)} heures · vues ordinateur + mobile · source : dumps horaires Wikimedia (heures en UTC)
-      </p>
-      <div className="h-56">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -6 }}>
-            <CartesianGrid {...GRID} />
-            <XAxis dataKey="ts" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={(v) => fmtShortDateTime(v)} minTickGap={60} {...AXIS} />
-            <YAxis tickFormatter={(v) => fmtInt(v)} width={56} {...AXIS} />
-            <Tooltip
-              cursor={{ stroke: "#3FD0C9", strokeOpacity: 0.4 }}
-              content={({ active, payload }) =>
-                active && payload?.length ? (
-                  <TooltipCard
-                    title={`${fmtShortDateTime((payload[0].payload as { ts: number }).ts)} UTC`}
-                    rows={[{ key: "v", label: "Vues (1 h)", color: "#3FD0C9", value: payload[0].value as number }]}
-                  />
-                ) : null
-              }
-            />
-            <Line type="monotone" dataKey="views" stroke="#3FD0C9" strokeWidth={2} dot={false} isAnimationActive={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </>
-  );
-}
-
 export default function ArticlePage() {
-  const { lang, title } = useArticleParams();
-  const valid = isLang(lang) && title.length > 0;
-  const art = usePolling((s) => (valid ? api.article(lang as Lang, title, s) : Promise.reject(new ApiError(400, "Adresse d'article invalide."))), 30000, [lang, title]);
+  const p = useArticleParams();
+  const lang = isLang(p.lang) ? (p.lang as Lang) : null;
+  const st = usePolling((s) => (lang ? api.article(lang, p.title, s) : Promise.reject(new ApiError(400, "langue inconnue"))), 60000, [p.lang, p.title]);
+  const a = st.data;
+  useTitle(a ? a.title : p.title || "Article");
 
-  if (!valid) {
-    return (
-      <Empty title="Adresse d'article invalide">
-        La langue doit être ar, fr ou en. <Link className="link" to="/">Retour au radar</Link>
-      </Empty>
-    );
-  }
-  const l = lang as Lang;
-
-  const header = (
-    <header className="fade-up mb-6">
-      <Link to="/" className="font-mono text-xs text-ink-3 hover:text-cyan">
-        ← Radar en direct
-      </Link>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <LangBadge lang={l} size="md" />
-        <span className="text-sm text-ink-3">Wikipédia en {LANG_NAME[l]}</span>
-      </div>
-      <h1 dir={dirOf(l)} className={`mt-2 text-3xl font-bold leading-tight tracking-tight text-white sm:text-4xl ${l === "ar" ? "font-arabic text-right" : "font-display"}`}>
-        <span aria-hidden>📄 </span>
-        {title}
-      </h1>
-      <a className="link mt-2 inline-block text-sm" href={art.data?.url ?? wikiUrl(l, title)} target="_blank" rel="noreferrer">
-        Voir sur Wikipédia ↗
-      </a>
-    </header>
-  );
-
-  if (!art.data) {
-    return (
-      <div>
-        {header}
-        <div className="panel p-5">
-          {art.error ? (
-            art.error instanceof ApiError && art.error.status === 404 ? (
-              <Empty title="Aucune donnée pour cet article">
-                Cet article n'a encore aucune modification, aucun texte ni aucune vue horaire dans notre base.
-              </Empty>
+  if (!a) {
+    if (st.error instanceof ApiError && (st.error.status === 404 || st.error.status === 400))
+      return (
+        <div>
+          <header className="page-head">
+            <p className="kicker">Article</p>
+            <h1 className="t-40" dir={lang ? dirOf(lang) : undefined}>
+              {p.title || "Article introuvable"}
+            </h1>
+            <p className="standfirst">
+              {lang
+                ? `Aucune donnée pour cet article dans MongoDB : pas de modification reçue, pas de texte, pas de vues chargées.`
+                : "La langue doit être ar, fr ou en."}
+            </p>
+          </header>
+          <EmptyState>
+            {lang && p.title ? (
+              <>
+                <ExtLink href={wikiUrl(lang, p.title)}>Lire l’article sur {wikiName(lang)}</ExtLink> · <Link to="/recherche">Chercher un autre article</Link>
+              </>
             ) : (
-              <ErrorState error={art.error} onRetry={art.refresh} />
-            )
-          ) : (
-            <Loading rows={4} label="Chargement de l'article…" />
-          )}
+              <Link to="/">Retour à la une</Link>
+            )}
+          </EmptyState>
         </div>
+      );
+    if (st.error) return <ErrorState error={st.error} onRetry={st.refresh} retryMs={60000} />;
+    return (
+      <div className="split-main">
+        <div>
+          <Loading lines={2} height={36} />
+          <Loading lines={1} height={180} />
+        </div>
+        <Loading lines={1} height={240} />
       </div>
     );
   }
 
-  const a = art.data;
+  const en = a.enrichment;
+  const dir = dirOf(a.lang);
+
   return (
     <div>
-      {header}
-      <StaleBanner error={art.error} />
-      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Modifications" value={fmtInt(a.stats.edits_total)} hint={`${fmtInt(a.stats.edits_human)} humaines`} />
-        <StatTile label="Contributeurs" value={fmtInt(a.stats.distinct_users)} hint="distincts" />
-        <StatTile label="Octets (somme)" accent="none" value={<DeltaBytes value={a.stats.delta_bytes} />} />
-        <StatTile label="Alertes" accent={a.alerts.length ? "alert" : "none"} value={fmtInt(a.alerts.length)} />
-        <StatTile label="Première modif." accent="none" value={<span className="text-base">{a.stats.first_edit ? fmtTimeUtc(a.stats.first_edit) : "–"}</span>} hint={a.stats.first_edit ? fmtDateTimeUtc(a.stats.first_edit).slice(0, 10) : undefined} />
-        <StatTile label="Dernière modif." accent="none" value={<span className="text-base"><TimeAgo iso={a.stats.last_edit} /></span>} hint={a.stats.last_edit ? fmtDateTimeUtc(a.stats.last_edit) : undefined} />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <Panel className="xl:col-span-7" title="Modifications par tranche de 5 min (24 h)" right={<span className="font-mono text-[11px] text-ink-3">UTC</span>}>
-          <EditsTimeline a={a} />
-        </Panel>
-
-        <Panel className="xl:col-span-5" title="Alertes pour cet article">
-          {a.alerts.length === 0 ? (
-            <Empty title="Aucune alerte">Aucun pic anormal détecté pour cet article.</Empty>
-          ) : (
-            <ul className="divide-y divide-line/70">
-              {a.alerts.map((al) => (
-                <li key={al.id} className="flex items-center justify-between gap-3 py-2.5">
-                  <div className="min-w-0">
-                    <p className="font-mono text-xs text-ink-2">{fmtDateTimeUtc(al.window_end)}</p>
-                    <p className="text-xs text-ink-3">
-                      {fmtInt(al.edits)} modifs · {fmtInt(al.distinct_users)} contributeurs
-                    </p>
-                    <div className="mt-1">
-                      <BaselineBadge type={al.baseline_type} />
-                    </div>
-                  </div>
-                  <p className="num text-2xl font-bold text-alert">z {fmtDec1(al.z_score)}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel className="xl:col-span-12" title={`Textes ajoutés et retirés (${fmtInt(a.texts.length)} dernières révisions)`}>
-          {a.texts.length === 0 ? (
-            <Empty>
-              Aucun texte récupéré pour l'instant. Le diff-worker télécharge le contenu des modifications humaines via l'API
-              Wikipédia (action=compare).
-            </Empty>
-          ) : (
-            <ul>
-              {a.texts.map((t) => (
-                <TextItem key={t.id} t={t} lang={l} />
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        {a.pageviews_count > 0 && (
-          <Panel className="xl:col-span-7" title="Vues par heure">
-            <PageviewsChart lang={l} title={a.title} />
-          </Panel>
+      {en?.theme && en.theme_label ? (
+        <Link to={themePath(en.theme)} className="crumb quiet">
+          ← Thème : {en.theme_label}
+        </Link>
+      ) : (
+        <Link to="/direct" className="crumb quiet">
+          ← En direct
+        </Link>
+      )}
+      <header className="page-head">
+        <Kicker theme={en?.theme} label={en?.theme_label ?? "Non classé"} extra={<span style={{ marginLeft: 12 }}>Article · {wikiName(a.lang)}</span>} />
+        <h1 className="t-40" dir={dir} lang={a.lang} style={{ maxWidth: "28ch" }}>
+          {a.title}
+        </h1>
+        {en?.description && (
+          <p className="standfirst" dir="auto">
+            {en.description.charAt(0).toUpperCase() + en.description.slice(1)}
+          </p>
         )}
+        <MetaLine
+          items={[
+            <LangCode lang={a.lang} />,
+            a.stats.last_edit ? <Timestamp iso={a.stats.last_edit} prefix="modifié" /> : null,
+            plural(a.stats.distinct_users, "contributeur"),
+            plural(a.stats.edits_total, "modification"),
+          ]}
+        />
+      </header>
 
-        <Panel className={a.pageviews_count > 0 ? "xl:col-span-5" : "xl:col-span-12"} title={`Dernières modifications (${fmtInt(a.edits.length)})`}>
-          {a.edits.length === 0 ? (
-            <Empty>Aucune modification enregistrée.</Empty>
-          ) : (
-            <ul className="max-h-[420px] divide-y divide-line/70 overflow-y-auto pr-1">
-              {a.edits.map((e) => (
-                <li key={e.id} className="grid grid-cols-[1fr_auto] gap-2 py-2 text-sm">
-                  <div className="min-w-0">
-                    <p className="truncate text-ink-2">
-                      <bdi>{e.user || "anonyme"}</bdi>
-                      {e.bot && <span className="ml-1 rounded bg-white/10 px-1 font-mono text-[10px]">BOT</span>}
-                    </p>
-                    {e.comment && (
-                      <p className="truncate text-xs italic text-ink-3" dir="auto">
-                        {e.comment}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <DeltaBytes value={e.delta_bytes} className="block text-xs" />
-                    <span className="font-mono text-[10.5px] text-ink-3">{fmtDateTimeUtc(e.timestamp)}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
+      <div className="split-main">
+        <div className="vr">
+          {(a.events?.length ?? 0) > 0 && (
+            <section aria-labelledby="a-events">
+              <SectionHeader id="a-events" title="Événements liés" />
+              <ul>
+                {a.events!.map((ev) => (
+                  <EventCompact key={ev.id} ev={ev} showTheme />
+                ))}
+              </ul>
+            </section>
           )}
-        </Panel>
+          <section aria-labelledby="a-tl">
+            <SectionHeader id="a-tl" title="Activité des dernières 24 heures" />
+            <EditsChart a={a} />
+          </section>
+          <section aria-labelledby="a-texts">
+            <SectionHeader id="a-texts" title="Textes ajoutés et retirés" right={a.texts.length ? `${fmtInt(a.texts.length)} dernières révisions` : null} />
+            {a.texts.length ? (
+              <>
+                <ul>
+                  {a.texts.slice(0, 8).map((t) => (
+                    <EditText key={t.id} lang={a.lang} timestamp={t.timestamp} comment={t.comment} added={t.added_text} removed={t.removed_text} rev={t.rev_new} />
+                  ))}
+                </ul>
+                <SourceNote>
+                  API Wikipédia <code>action=compare</code>, collection <Coll name="edit_texts" />. Balisage wiki retiré pour la lecture.
+                </SourceNote>
+              </>
+            ) : (
+              <EmptyState reason="Le texte n’est récupéré que pour les modifications humaines ; la file donne la priorité à l’arabe, au français et aux articles actifs.">
+                Aucun texte de révision récupéré pour cet article.
+              </EmptyState>
+            )}
+          </section>
+          {a.alerts.length > 0 && (
+            <section aria-labelledby="a-alerts">
+              <SectionHeader id="a-alerts" title="Alertes du détecteur" right={plural(a.alerts.length, "alerte")} />
+              <AlertsTable alerts={a.alerts} />
+              <SourceNote>
+                collection <Coll name="alerts" />.
+              </SourceNote>
+            </section>
+          )}
+          <section aria-labelledby="a-edits">
+            <SectionHeader id="a-edits" title="Dernières modifications" />
+            {a.edits.length ? <EditsTable a={a} /> : <EmptyState>Aucune modification reçue par le flux pour cet article.</EmptyState>}
+          </section>
+        </div>
+
+        <aside className="stack-24" aria-label="Fiche">
+          <WikiImage eager url={en?.thumbnail_url} lang={a.lang} title={a.title} alt={a.title} />
+          <FactBox
+            title="Fiche"
+            facts={[
+              { label: "Modifications reçues", value: fmtInt(a.stats.edits_total), note: `dont ${fmtInt(a.stats.edits_human)} humaines` },
+              { label: "Contributeurs", value: fmtInt(a.stats.distinct_users) },
+              {
+                label: "Octets ajoutés (somme)",
+                value: fmtSigned(a.stats.delta_bytes),
+                note: a.stats.delta_bytes === 0 && a.stats.edits_total > 1 ? "les ajouts et les retraits s’annulent" : undefined,
+              },
+              { label: "Première modification", value: a.stats.first_edit ? fmtDayTimeUtc(a.stats.first_edit) : "–" },
+              { label: "Dernière modification", value: a.stats.last_edit ? fmtDayTimeUtc(a.stats.last_edit) : "–" },
+              { label: "Heures de vues chargées", value: fmtInt(a.pageviews_count) },
+            ]}
+          />
+          <section>
+            <SectionHeader as="h3" title="Liens" thin />
+            <ul className="links-list">
+              <li>
+                <ExtLink href={a.url}>Lire sur {wikiName(a.lang)}</ExtLink>
+              </li>
+              {en?.wikidata_url && (
+                <li>
+                  <ExtLink href={en.wikidata_url}>
+                    Wikidata <span className="mono">{en.qid}</span>
+                  </ExtLink>
+                </li>
+              )}
+            </ul>
+          </section>
+          <section>
+            <SectionHeader as="h3" title="Pourquoi ce thème ?" thin />
+            <Why a={a} />
+          </section>
+          <p className="source">
+            Article en {LANG_NAME[a.lang]} ; document <span className="mono">{`${a.lang}:${a.title}`}</span> de la collection <Coll name="articles" />
+            {en?.enriched_at ? `, enrichi le ${fmtDayTimeUtc(en.enriched_at)}` : ""}.
+          </p>
+        </aside>
       </div>
     </div>
   );

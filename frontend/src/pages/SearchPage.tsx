@@ -1,125 +1,205 @@
-import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { api, type Lang } from "../api";
-import { useDebounced, usePolling } from "../hooks/usePolling";
-import { fmtDateTimeUtc, fmtInt } from "../lib/format";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { api, type Lang, type SearchResult, type ThemeId } from "../api";
+import { usePolling } from "../hooks/usePolling";
+import { useTitle } from "../hooks/useTitle";
+import { fmtDayTimeUtc, fmtInt, plural } from "../lib/format";
 import { highlight } from "../lib/highlight";
-import { dirOf, isLang } from "../lib/lang";
-import { ArticleLink, Empty, ErrorState, LangBadge, LangFilter, Loading, PageHeader, Panel, TimeAgo } from "../components/ui";
+import { LANG_CODE, LANG_ORDER, articlePath, dirOf } from "../lib/lang";
+import { themePath } from "../lib/themes";
+import { cleanComment, cleanSnippet } from "../lib/wikitext";
+import { Choice } from "../components/blocks";
+import { EmptyState, ErrorState, Loading } from "../components/states";
+import { Coll, LangCode, MetaLine, SectionHeader, SourceNote } from "../components/text";
 
-const EXAMPLES = ["séisme", "Maroc", "élection", "football", "earthquake", "president", "زلزال", "المغرب"];
+const EXAMPLES = ["séisme", "Maroc", "élection", "football", "زلزال", "earthquake"];
+
+interface Group {
+  lang: Lang;
+  title: string;
+  theme: ThemeId | null;
+  themeLabel: string | null;
+  hits: SearchResult[];
+}
+
+function group(items: SearchResult[]): Group[] {
+  const map = new Map<string, Group>();
+  for (const it of items) {
+    const k = `${it.lang}:${it.title}`;
+    let g = map.get(k);
+    if (!g) {
+      g = { lang: it.lang, title: it.title, theme: it.theme ?? null, themeLabel: it.theme_label ?? null, hits: [] };
+      map.set(k, g);
+    }
+    g.hits.push(it);
+  }
+  return [...map.values()];
+}
+
+function Result({ g, q }: { g: Group; q: string }) {
+  const best = g.hits[0];
+  const snippet = cleanSnippet(best.snippet);
+  const comment = cleanComment(best.comment);
+  const latest = g.hits.reduce((a, h) => (h.timestamp > a ? h.timestamp : a), best.timestamp);
+  return (
+    <li className="quote" style={{ paddingTop: 16 }}>
+      {g.theme && g.themeLabel && (
+        <p className="kicker" style={{ marginBottom: 6 }}>
+          <Link to={themePath(g.theme)}>{g.themeLabel}</Link>
+        </p>
+      )}
+      <h3 className="t-20">
+        <Link to={articlePath(g.lang, g.title)} className="hl" dir={dirOf(g.lang)} lang={g.lang}>
+          {g.title}
+        </Link>
+      </h3>
+      {snippet && (
+        <p dir={dirOf(g.lang)} lang={g.lang} className="t-16" style={{ marginTop: 6, maxWidth: "68ch", overflowWrap: "anywhere" }}>
+          {highlight(snippet, q)}
+        </p>
+      )}
+      {comment && (
+        <p className="t-14 muted" style={{ marginTop: 4 }}>
+          Résumé : <bdi dir="auto">{highlight(comment, q)}</bdi>
+        </p>
+      )}
+      <MetaLine
+        className="num"
+        items={[
+          <LangCode lang={g.lang} />,
+          g.theme ? null : "thème non classé",
+          fmtDayTimeUtc(latest),
+          g.hits.length > 1 ? (
+            <Link to={articlePath(g.lang, g.title)}>
+              {plural(g.hits.length - 1, "autre passage", "autres passages")}
+            </Link>
+          ) : (
+            "1 passage"
+          ),
+        ]}
+      />
+    </li>
+  );
+}
 
 export default function SearchPage() {
   const [params, setParams] = useSearchParams();
-  const [input, setInput] = useState(params.get("q") ?? "");
-  const langParam = params.get("lang");
-  const lang: Lang | null = isLang(langParam) ? langParam : null;
-  const q = useDebounced(input.trim(), 400);
+  const q = (params.get("q") ?? "").trim();
+  const lang = (LANG_ORDER as string[]).includes(params.get("lang") ?? "") ? (params.get("lang") as Lang) : null;
+  const theme = (params.get("theme") || null) as ThemeId | null;
+  const [draft, setDraft] = useState(q);
+  useEffect(() => setDraft(q), [q]);
+  useTitle(q ? `Recherche : ${q}` : "Recherche");
+
+  const themes = usePolling((s) => api.themes(s).catch(() => null), null);
+  const stats = usePolling((s) => api.stats(s).catch(() => null), null);
   const valid = q.length >= 2 && q.length <= 100;
+  const res = usePolling((s) => (valid ? api.search(q, { lang, theme, limit: 50 }, s) : Promise.resolve(null)), null, [q, lang, theme]);
+  const groups = useMemo(() => (res.data ? group(res.data.items) : []), [res.data]);
 
-  useEffect(() => {
+  const set = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
-    if (q) next.set("q", q);
-    else next.delete("q");
-    if (next.toString() !== params.toString()) setParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q]);
-
-  const setLang = (l: Lang | null) => {
-    const next = new URLSearchParams(params);
-    if (l) next.set("lang", l);
-    else next.delete("lang");
-    setParams(next, { replace: true });
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
+    setParams(next);
   };
-
-  const res = usePolling((s) => (valid ? api.search(q, { lang, limit: 30 }, s) : Promise.resolve(null)), null, [q, lang, valid]);
-  const typing = input.trim() !== q;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    set({ q: draft.trim() || null });
+  };
+  const textsCount = stats.data?.collections.edit_texts?.count;
 
   return (
     <div>
-      <PageHeader icon="🔎" title="Recherche">
-        <p>
-          Cherchez un mot dans les textes ajoutés aux articles et dans les commentaires des contributeurs (index texte MongoDB sur la
-          collection <code className="font-mono text-ink">edit_texts</code>). La recherche porte sur des mots entiers.
+      <header className="page-head">
+        <h1 className="t-40">Recherche</h1>
+        <p className="standfirst">
+          Recherche plein texte dans {textsCount ? `${fmtInt(textsCount)} ` : "les "}textes ajoutés aux articles Wikipédia, en arabe, français et anglais.
         </p>
-      </PageHeader>
-
-      <div className="panel mb-6 p-4">
-        <label htmlFor="q" className="label">
-          Mot ou expression
-        </label>
-        <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="relative flex-1">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3" aria-hidden>
-              🔎
+        <form className="searchbar" role="search" onSubmit={submit} style={{ marginTop: 20 }}>
+          <label htmlFor="q" className="sr-only">
+            Mots à chercher
+          </label>
+          <input id="q" className="input" type="search" dir="auto" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Un mot, un nom, un lieu" maxLength={100} />
+          <button className="btn" type="submit">
+            Rechercher
+          </button>
+        </form>
+        <p className="t-14 muted" style={{ marginTop: 10 }}>
+          Exemples :{" "}
+          {EXAMPLES.map((ex, i) => (
+            <span key={ex}>
+              {i > 0 && ", "}
+              <Link to={`/recherche?q=${encodeURIComponent(ex)}`} dir="auto">
+                {ex}
+              </Link>
             </span>
-            <input
-              id="q"
-              type="search"
-              dir="auto"
-              autoComplete="off"
-              maxLength={100}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="ex. séisme, earthquake, زلزال…"
-              className="w-full rounded-xl border border-line2 bg-night/70 py-2.5 pl-10 pr-3 text-[15px] text-white placeholder:text-ink-3 focus:border-cyan/60 focus:outline-none"
+          ))}
+        </p>
+      </header>
+
+      <div className="split-main">
+        <section aria-labelledby="s-res">
+          <SectionHeader
+            id="s-res"
+            title={q ? <>Résultats pour « {q} »</> : "Résultats"}
+            right={res.data ? `${plural(groups.length, "article")}, ${plural(res.data.items.length, "passage")}` : null}
+          />
+          {!q ? (
+            <EmptyState>Saisissez au moins deux caractères.</EmptyState>
+          ) : !valid ? (
+            <EmptyState>La recherche doit contenir entre 2 et 100 caractères.</EmptyState>
+          ) : !res.data ? (
+            res.error ? <ErrorState error={res.error} onRetry={res.refresh} /> : <Loading lines={8} />
+          ) : !groups.length ? (
+            <EmptyState reason="Essayez un autre mot, une autre langue ou retirez le filtre de thème.">Aucun texte ne contient ces mots.</EmptyState>
+          ) : (
+            <>
+              <ul>
+                {groups.map((g) => (
+                  <Result key={`${g.lang}:${g.title}`} g={g} q={q} />
+                ))}
+              </ul>
+              <SourceNote>
+                index texte MongoDB (<code>$text</code>) sur la collection <Coll name="edit_texts" />, 50 meilleurs passages regroupés par article. Balisage
+                wiki retiré pour la lecture.
+              </SourceNote>
+            </>
+          )}
+        </section>
+
+        <aside className="stack-24" aria-label="Filtres">
+          <div>
+            <SectionHeader as="h3" title="Langue" thin />
+            <Choice<string>
+              hideLabel
+              label="Langue"
+              value={lang ?? "all"}
+              onChange={(v) => set({ lang: v === "all" ? null : v })}
+              options={[{ value: "all", label: "toutes" }, ...LANG_ORDER.map((l) => ({ value: l, label: <span className="mono">{LANG_CODE[l]}</span> }))]}
             />
           </div>
-          <LangFilter value={lang} onChange={setLang} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-ink-3">Exemples :</span>
-          {EXAMPLES.map((ex) => (
-            <button
-              key={ex}
-              dir="auto"
-              onClick={() => setInput(ex)}
-              className="rounded-full border border-line2 bg-night/50 px-2.5 py-0.5 text-xs text-ink-2 hover:border-cyan/50 hover:text-white"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
+          {themes.data && (
+            <div>
+              <SectionHeader as="h3" title="Thème" thin />
+              <label className="sr-only" htmlFor="theme">
+                Thème
+              </label>
+              <select id="theme" className="select" value={theme ?? ""} onChange={(e) => set({ theme: e.target.value || null })}>
+                <option value="">Tous les thèmes</option>
+                {themes.data.items.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+              <p className="source">Thème de l’article (collection <Coll name="articles" />) ; les articles pas encore classés sont exclus du filtre.</p>
+            </div>
+          )}
+        </aside>
       </div>
-
-      <Panel
-        title="Résultats"
-        right={res.data ? <span className="num text-xs text-ink-3">{fmtInt(res.data.count)} résultat{res.data.count > 1 ? "s" : ""}</span> : null}
-      >
-        {!valid ? (
-          <Empty title="Tapez au moins 2 caractères">Essayez un des exemples ci-dessus.</Empty>
-        ) : res.error ? (
-          <ErrorState error={res.error} onRetry={res.refresh} />
-        ) : !res.data || typing ? (
-          <Loading rows={4} label="Recherche…" />
-        ) : res.data.items.length === 0 ? (
-          <Empty title={`Aucun résultat pour « ${q} »`}>
-            Les textes sont récupérés en continu : réessayez dans quelques minutes, ou essayez un autre mot.
-          </Empty>
-        ) : (
-          <ul className="divide-y divide-line/70">
-            {res.data.items.map((r) => (
-              <li key={r.id} className="fade-up min-w-0 py-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <LangBadge lang={r.lang} />
-                  <ArticleLink lang={r.lang} title={r.title} className="font-display text-[15px] font-semibold text-white" />
-                </div>
-                <p dir={dirOf(r.lang)} className={`mt-2 text-sm leading-relaxed text-ink-2 [overflow-wrap:anywhere] ${r.lang === "ar" ? "font-arabic" : ""}`}>
-                  {highlight(r.snippet, q)}
-                </p>
-                {r.comment && (
-                  <p className="mt-1 text-xs italic text-ink-3 [overflow-wrap:anywhere]">
-                    Commentaire : « <bdi>{highlight(r.comment, q)}</bdi> »
-                  </p>
-                )}
-                <p className="mt-1.5 font-mono text-[11px] text-ink-3">
-                  {fmtDateTimeUtc(r.timestamp)} · <TimeAgo iso={r.timestamp} /> · révision {r.rev_new}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
     </div>
   );
 }

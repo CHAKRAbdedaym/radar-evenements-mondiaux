@@ -4,8 +4,36 @@ import { setFeedStatus, setRefTime } from "./lib/clock";
 
 export type Lang = "ar" | "fr" | "en";
 export type BaselineType = "article" | "provisoire";
-export type CollectionName = "edits" | "edit_texts" | "pageviews" | "alerts" | "ingestion_log" | "scores";
-export type DataKind = "semi-structured" | "unstructured" | "structured" | "system";
+export type CollectionName =
+  | "edits"
+  | "edit_texts"
+  | "pageviews"
+  | "articles"
+  | "wikidata_entities"
+  | "events"
+  | "alerts"
+  | "scores"
+  | "ingestion_log";
+export type DataKind = "semi-structured" | "unstructured" | "structured" | "derived" | "system";
+export type ThemeId =
+  | "catastrophes"
+  | "conflits"
+  | "politique"
+  | "sport"
+  | "personnalites"
+  | "culture"
+  | "science"
+  | "economie"
+  | "sante"
+  | "autres";
+export type ThemeSource = "wikidata" | "catégories" | "mots-clés" | "inconnu";
+export type EventStatus = "en cours" | "terminé" | "historique";
+
+/** theme + theme_label on list items (null when the article is not enriched yet). */
+export interface Themed {
+  theme?: ThemeId | null;
+  theme_label?: string | null;
+}
 
 export interface Health {
   status: string;
@@ -44,7 +72,7 @@ export interface Stats {
   pageviews_hours_loaded: number;
 }
 
-export interface Edit {
+export interface Edit extends Themed {
   id: string;
   title: string;
   lang: Lang;
@@ -57,7 +85,7 @@ export interface Edit {
   url: string;
 }
 
-export interface TopEdit {
+export interface TopEdit extends Themed {
   lang: Lang;
   title: string;
   edits: number;
@@ -80,7 +108,7 @@ export interface Timeline {
   items: TimelinePoint[];
 }
 
-export interface RadarItem {
+export interface RadarItem extends Themed {
   lang: Lang;
   title: string;
   edits: number;
@@ -99,7 +127,7 @@ export interface Radar {
   items: RadarItem[];
 }
 
-export interface Alert {
+export interface Alert extends Themed {
   id: string;
   lang: Lang;
   title: string;
@@ -141,6 +169,130 @@ export interface Article {
   texts: EditText[];
   alerts: Alert[];
   pageviews_count: number;
+  enrichment?: Enrichment | null;
+  events?: EventSummary[];
+}
+
+export interface Enrichment {
+  qid: string | null;
+  description: string | null;
+  thumbnail_url: string | null;
+  categories: string[];
+  instance_of: { qid: string; label: string | null }[];
+  occupations: { qid: string; label: string | null }[];
+  death_date: string | null;
+  theme: ThemeId | null;
+  theme_label: string | null;
+  theme_source: ThemeSource | null;
+  theme_confidence: number | null;
+  theme_reason: string | null;
+  enriched_at: string | null;
+  wikidata_url: string | null;
+}
+
+export interface EventSummary {
+  id: string;
+  kind: "detected" | "historique";
+  qid: string | null;
+  theme: ThemeId;
+  theme_label: string;
+  title: string;
+  titles: Partial<Record<Lang, string>>;
+  description: string | null;
+  thumbnail_url: string | null;
+  first_seen: string | null;
+  last_activity: string | null;
+  peak_z: number | null;
+  peak_at: string | null;
+  langs: Lang[];
+  total_edits: number;
+  distinct_users: number;
+  alerts_count: number;
+  status: EventStatus;
+  significance?: number | null;
+  lead_eligible?: boolean;
+  spark: number[];
+}
+
+export interface EventDetail {
+  event: EventSummary & {
+    articles: { lang: Lang; title: string; url: string; theme: ThemeId | null; theme_source: ThemeSource | null; theme_reason: string | null }[];
+    wikidata_url: string | null;
+    links: { lang: Lang; title: string; url: string }[];
+    peak_views: number | null;
+    total_views: number | null;
+  };
+  bucket_seconds: number;
+  timeline: TimelinePoint[];
+  texts: { id: string; lang: Lang; title: string; timestamp: string; comment: string | null; added_text: string | null }[];
+  pageviews: { lang: Lang; title: string; items: PageviewPoint[] }[];
+  alerts: Alert[];
+  editors_top: { user: string; edits: number }[];
+}
+
+export interface ThemeItem {
+  id: ThemeId;
+  label: string;
+  events: number;
+  active_events: number;
+  edits_24h: number;
+  articles: number;
+  trend: number[];
+  top_events: EventSummary[];
+}
+
+export interface ThemesIndex {
+  ref_time: string | null;
+  items: ThemeItem[];
+}
+
+export interface ThemeDetail {
+  id: ThemeId;
+  label: string;
+  ref_time: string | null;
+  events: EventSummary[];
+  top_articles: {
+    lang: Lang;
+    title: string;
+    edits_24h: number;
+    distinct_users: number;
+    qid: string | null;
+    description: string | null;
+    thumbnail_url: string | null;
+    theme_source: ThemeSource | null;
+  }[];
+  timeline: { t: string; edits: number }[];
+  counts: { events: number; active_events: number; edits_24h: number; articles: number };
+}
+
+export interface ThemesTimeline {
+  hours: number;
+  bucket_seconds: number;
+  themes: { id: ThemeId; label: string }[];
+  items: ({ t: string; non_classe: number } & Partial<Record<ThemeId, number>>)[];
+}
+
+export interface Classification {
+  total_articles: number;
+  candidates: number;
+  by_theme: { id: ThemeId; label: string; count: number; pct: number }[];
+  by_source: { source: ThemeSource; count: number; pct: number }[];
+  by_lang: { lang: Lang; count: number }[];
+  with_qid: number;
+  with_thumbnail: number;
+  last_enriched_at: string | null;
+}
+
+export interface FrontPage {
+  ref_time: string | null;
+  lead: EventSummary | null;
+  lead_reason: "48h" | "7j" | "archives" | null;
+  sections: { id: ThemeId; label: string; events: EventSummary[] }[];
+}
+
+export interface EventsList {
+  count: number;
+  items: EventSummary[];
 }
 
 export interface PageviewPoint {
@@ -180,7 +332,7 @@ export interface Replay {
   series: ReplaySeries[];
 }
 
-export interface SearchResult {
+export interface SearchResult extends Themed {
   id: string;
   lang: Lang;
   title: string;
@@ -239,7 +391,7 @@ async function get<T>(path: string, params?: Params, signal?: AbortSignal): Prom
     res = await fetch(buildUrl(path, params), { signal, headers: { Accept: "application/json" } });
   } catch (e) {
     if ((e as Error).name === "AbortError") throw e;
-    throw new ApiError(0, "Impossible de joindre l'API (réseau).");
+    throw new ApiError(0, "Impossible de joindre l’API (réseau).");
   }
   if (!res.ok) {
     let detail = `Erreur HTTP ${res.status}`;
@@ -311,8 +463,36 @@ export const api = {
 
   replayAlHaouz: (signal?: AbortSignal) => get<Replay>("/replay/alhaouz", undefined, signal),
 
-  search: (q: string, f: { lang?: Lang | null; limit?: number }, signal?: AbortSignal) =>
-    get<Search>("/search", { q, lang: f.lang, limit: f.limit ?? 20 }, signal),
+  search: (q: string, f: { lang?: Lang | null; theme?: ThemeId | null; limit?: number }, signal?: AbortSignal) =>
+    get<Search>("/search", { q, lang: f.lang, theme: f.theme, limit: f.limit ?? 20 }, signal),
+
+  frontpage: (signal?: AbortSignal) =>
+    get<FrontPage>("/frontpage", undefined, signal).then((d) => {
+      setRefTime(d.ref_time);
+      return d;
+    }),
+  themes: (signal?: AbortSignal) =>
+    get<ThemesIndex>("/themes", undefined, signal).then((d) => {
+      setRefTime(d.ref_time);
+      return d;
+    }),
+  theme: (id: string, signal?: AbortSignal) =>
+    get<ThemeDetail>(`/themes/${enc(id)}`, undefined, signal).then((d) => {
+      setRefTime(d.ref_time);
+      return d;
+    }),
+  themesTimeline: (hours: number, signal?: AbortSignal) => get<ThemesTimeline>("/themes/timeline", { hours }, signal),
+  classification: (signal?: AbortSignal) => get<Classification>("/themes/classification", undefined, signal),
+  events: (
+    f: { theme?: ThemeId | null; status?: EventStatus | null; kind?: string | null; sort?: "recent" | "peak" | "significance"; lead?: boolean; limit?: number },
+    signal?: AbortSignal,
+  ) =>
+    get<EventsList>(
+      "/events",
+      { theme: f.theme, status: f.status, kind: f.kind, sort: f.sort, lead: f.lead ? "true" : undefined, limit: f.limit ?? 20 },
+      signal,
+    ),
+  event: (id: string, signal?: AbortSignal) => get<EventDetail>(`/events/${enc(id)}`, undefined, signal),
 
   explorer: (collection: CollectionName, p: { limit?: number; skip?: number }, signal?: AbortSignal) =>
     get<Explorer>(`/explorer/${collection}`, { limit: p.limit ?? 20, skip: p.skip ?? 0 }, signal),

@@ -2,13 +2,6 @@ import type { Lang } from "../api";
 
 export const LANGS: Lang[] = ["ar", "fr", "en"];
 
-/** Validated categorical trio (dark surface #121B30): distinct for CVD, always paired with the code as text. */
-export const LANG_COLOR: Record<Lang, string> = {
-  ar: "#869A1A",
-  fr: "#3987E5",
-  en: "#D55181",
-};
-
 export const LANG_NAME: Record<Lang, string> = {
   ar: "arabe",
   fr: "français",
@@ -35,12 +28,8 @@ export function articlePath(lang: Lang, title: string): string {
   return `/article/${lang}/${encodeURIComponent(title)}`;
 }
 
-/** Stable 32-bit FNV-1a hash (used to place an article at a fixed angle on the radar). */
-export function hashString(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
+/** Display order everywhere (French UI): FR, EN, AR. */
+export const LANG_ORDER: Lang[] = ["fr", "en", "ar"];
+
+/** "Wikipédia (en)" */
+export const wikiName = (lang: Lang): string => `Wikipédia (${lang})`;

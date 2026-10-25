@@ -1,0 +1,82 @@
+/* Design tokens — docs/DESIGN_SYSTEM.md §2. Defined once; every other stylesheet uses var(--…). */
+:root {
+  /* colour */
+  --paper: #f7f5f0;
+  --surface: #ffffff;
+  --ink: #15171c;
+  --ink-2: #5a606b;
+  --ink-3: #8a8f98;
+  --rule: #dad6cc;
+  --rule-strong: #15171c;
+  --accent: #b42318;
+  --accent-soft: #f6e7e4;
+  --focus: #1f4e8c;
+  --mark: #f1e7c8;
+
+  /* chart palette (mirrored in styles/chart.ts) */
+  --c-en: #15171c;
+  --c-fr: #3d5a80;
+  --c-ar: #a8742a;
+  --c-4: #5e7d5a;
+  --c-5: #8c5a3c;
+  --c-rest: #9aa0a6;
+
+  /* type */
+  --font-serif: "Newsreader Variable", "Newsreader", Georgia, "Times New Roman", serif;
+  --font-sans: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-ar: "IBM Plex Sans Arabic", "Noto Naskh Arabic", serif;
+
+  --fs-56: 56px;
+  --fs-40: 40px;
+  --fs-28: 28px;
+  --fs-20: 20px;
+  --fs-16: 16px;
+  --fs-14: 14px;
+  --fs-12: 12px;
+
+  --lh-56: 1.04;
+  --lh-40: 1.1;
+  --lh-28: 1.2;
+  --lh-20: 1.3;
+  --lh-16: 1.55;
+  --lh-14: 1.45;
+  --lh-12: 1.35;
+
+  /* spacing (4/8 scale) */
+  --sp-4: 4px;
+  --sp-8: 8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-24: 24px;
+  --sp-32: 32px;
+  --sp-48: 48px;
+  --sp-64: 64px;
+  --sp-96: 96px;
+
+  /* layout */
+  --container: 1280px;
+  --pad: 32px;
+  --gutter: 24px;
+  --section-gap: var(--sp-48);
+
+  /* shape */
+  --radius: 2px;
+  --shadow-menu: 0 1px 2px rgba(21, 23, 28, 0.08);
+}
+
+@media (max-width: 1023px) {
+  :root {
+    --pad: 24px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --pad: 16px;
+    --gutter: 16px;
+    --section-gap: var(--sp-32);
+    --fs-56: 36px;
+    --fs-40: 32px;
+  }
+}
