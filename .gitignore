@@ -9,3 +9,5 @@ qa/screenshots/*.tmp
 backups/
 qa/screenshots/check/
 qa/screenshots/round*/*.png
+.claude/
+PROGRESS.md
