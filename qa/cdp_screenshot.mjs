@@ -64,12 +64,25 @@ for (const spec of pages) {
     returnByValue: true,
   });
   const dims = JSON.parse(result.result.value);
-  const fullH = Math.min(dims.h, 4000);
+  const fullH = Math.min(dims.h, Number(process.env.MAX_H || 9000));
   // Grow the viewport to the full page height so everything below the fold is painted.
   if (fullH > H) {
     await send("Emulation.setDeviceMetricsOverride", { width: W, height: fullH, deviceScaleFactor: 1, mobile });
     await sleep(800);
   }
+  // Wait (max IMG_WAIT_MS, default 20 s) until every image has finished loading: Wikimedia thumbnails are slow here.
+  const imgDeadline = Date.now() + Number(process.env.IMG_WAIT_MS || 20000);
+  let pendingImgs = 0;
+  while (Date.now() < imgDeadline) {
+    const r = await send("Runtime.evaluate", {
+      expression: "Array.from(document.images).filter((i) => !i.complete).length", returnByValue: true,
+    });
+    pendingImgs = r.result.result.value;
+    if (!pendingImgs) break;
+    await sleep(500);
+  }
+  if (pendingImgs) console.log(`   ${name}: ${pendingImgs} image(s) still loading after the wait`);
+  await sleep(300);
   const shot = await send("Page.captureScreenshot", {
     format: "png", captureBeyondViewport: true,
     clip: { x: 0, y: 0, width: W, height: fullH, scale: 1 },
