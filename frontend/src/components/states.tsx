@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "../api";
-import { fmtTimeUtc } from "../lib/format";
 
 /** One sentence, 14px ink-2, optional second line with the reason. No icon. */
 export function EmptyState({ children, reason }: { children: ReactNode; reason?: ReactNode }) {
@@ -64,7 +63,8 @@ export function ErrorState({ error, onRetry, retryMs }: { error: Error; onRetry?
 /** Shown above data that is still displayed after a failed refresh. */
 export function StaleNote({ error, lastUpdated }: { error: Error | null; lastUpdated: number | null }) {
   if (!error || !lastUpdated) return null;
-  return <p className="source">Mise à jour impossible pour l’instant : affichage des données reçues à {fmtTimeUtc(lastUpdated)} (heure du navigateur).</p>;
+  const min = Math.max(0, Math.round((Date.now() - lastUpdated) / 60000));
+  return <p className="source">Mise à jour impossible pour l’instant : données reçues il y a {min < 1 ? "moins d’une minute" : `${min} min`}.</p>;
 }
 
 /** Standard data block: loading → error → empty → content. */

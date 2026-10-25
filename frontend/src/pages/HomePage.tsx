@@ -5,7 +5,7 @@ import { useTitle } from "../hooks/useTitle";
 import { fmtInt, plural } from "../lib/format";
 import { themePath } from "../lib/themes";
 import { WikiImage } from "../components/blocks";
-import { EventCompact, EventLead, EventStandard, eventStandfirst, isLeadEligible } from "../components/EventItem";
+import { EventCompact, EventLead, EventStandard, displayTitle, eventStandfirst, isLeadEligible } from "../components/EventItem";
 import { PageviewsChart, hourRange } from "../components/ReplayChart";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { ArticleLink, Coll, LangCode, LangList, MetaLine, SectionHeader, SourceNote, StatusLabel } from "../components/text";
@@ -65,15 +65,32 @@ export function ArchiveLead({ replay, ev }: { replay: Replay; ev?: EventSummary 
         />
         {thumb && chart}
       </div>
-      <div>{thumb ? <WikiImage eager url={thumb} lang="en" title={AL_HAOUZ_EN} alt="Séisme d’Al Haouz, 2023" width={960} /> : chart}</div>
+      <div>{thumb ? <WikiImage eager url={thumb} lang="en" title={AL_HAOUZ_EN} alt="Séisme d’Al Haouz, 2023" width={960} creditData={ev?.image_credit} /> : chart}</div>
     </article>
+  );
+}
+
+/** "Aussi très modifiés : Guerre de Crimée (7), 1853 West Virginia rail disaster (4)" — one 14px line. */
+function AlsoLine({ items }: { items: EventSummary[] }) {
+  if (!items.length) return null;
+  return (
+    <p className="t-14 muted" style={{ marginTop: 12 }}>
+      {items.length > 1 ? "Aussi très modifiés : " : "Aussi très modifié : "}
+      {items.slice(0, 3).map((ev, i) => (
+        <span key={ev.id}>
+          {i > 0 && ", "}
+          <Link to={`/evenement/${encodeURIComponent(ev.id)}`}>{displayTitle(ev)}</Link> ({fmtInt(ev.total_edits)})
+        </span>
+      ))}
+      .
+    </p>
   );
 }
 
 /**
  * One theme section (DESIGN_SYSTEM §4): lead-eligible events as standard items
- * (≥ 4 → 4 × 3 columns; 1–3 → first item 6 columns + compact list 6 columns),
- * other events as compact one-line items (max 3). No events → one line.
+ * (≥ 4 → 4 × 3 columns; 1–3 → first item 6 columns + compact list 6 columns);
+ * other events appended to that list under "Aussi très modifié :" or as one inline line.
  */
 function ThemeSection({ id, label, events, stats }: { id: string; label: string; events: EventSummary[]; stats?: ThemeItem }) {
   const eligible = events.filter(isLeadEligible);
@@ -90,28 +107,16 @@ function ThemeSection({ id, label, events, stats }: { id: string; label: string;
       right={<Link to={themePath(id)}>{moreCount > 0 ? `Tout le thème (${plural(stats!.events, "événement")}) →` : "Tout le thème →"}</Link>}
     />
   );
-  if (!events.length) {
+  const edits = stats ? ` · ${plural(stats.edits_24h, "modification")} d’articles du thème en 24 h` : "";
+  if (!eligible.length) {
     return (
       <section aria-labelledby={`t-${id}`}>
         {header}
-        <EmptyState>
-          Aucun événement détecté{stats ? ` · ${plural(stats.edits_24h, "modification")} d’articles du thème en 24 h` : ""}.
-        </EmptyState>
+        <EmptyState>Aucun événement majeur détecté{edits}.</EmptyState>
+        <AlsoLine items={others} />
       </section>
     );
   }
-  const signals = (items: EventSummary[]) =>
-    items.length ? (
-      <div className="signals">
-        <p className="kicker">Articles très modifiés, sans événement majeur</p>
-        <ul className="cols-3" style={{ rowGap: 0 }}>
-          {items.slice(0, 3).map((ev) => (
-            <EventCompact key={ev.id} ev={ev} />
-          ))}
-        </ul>
-      </div>
-    ) : null;
-
   let body;
   if (eligible.length >= 4) {
     const row = eligible.slice(0, 4);
@@ -123,35 +128,62 @@ function ThemeSection({ id, label, events, stats }: { id: string; label: string;
             <EventStandard key={ev.id} ev={ev} photo={allPhotos} reserveKicker={row.some((e) => e.status === "en cours" || e.status === "historique")} />
           ))}
         </div>
-        {signals(others)}
-      </>
-    );
-  } else if (eligible.length >= 1) {
-    const [first, ...rest] = eligible;
-    const side = rest.length ? rest : others.slice(0, 3);
-    body = (
-      <>
-        <div className="split-6">
-          <EventStandard ev={first} />
-          {side.length > 0 && (
-            <ul className="compact-col">
-              {side.map((ev) => (
-                <EventCompact key={ev.id} ev={ev} />
-              ))}
-            </ul>
-          )}
-        </div>
-        {rest.length ? signals(others) : null}
+        <AlsoLine items={others} />
       </>
     );
   } else {
-    body = signals(others);
+    const [first, ...rest] = eligible;
+    const extra = others.slice(0, Math.max(0, 4 - rest.length));
+    body = (
+      <div className="split-6">
+        <EventStandard ev={first} />
+        {(rest.length > 0 || extra.length > 0) && (
+          <ul className="compact-col">
+            {rest.map((ev) => (
+              <EventCompact key={ev.id} ev={ev} />
+            ))}
+            {extra.length > 0 && (
+              <li className="t-14 muted" style={{ padding: rest.length ? "12px 0 0" : 0 }}>
+                {extra.length > 1 ? "Aussi très modifiés :" : "Aussi très modifié :"}
+              </li>
+            )}
+            {extra.map((ev) => (
+              <EventCompact key={ev.id} ev={ev} />
+            ))}
+          </ul>
+        )}
+      </div>
+    );
   }
   return (
     <section aria-labelledby={`t-${id}`}>
       {header}
       {body}
     </section>
+  );
+}
+
+/** Skeleton at final layout: lead + two theme sections (rule + 4 × 3 blocks). */
+function HomeSkeleton() {
+  return (
+    <div className="vr" aria-busy="true">
+      <div className="split-lead">
+        <Loading lines={5} height={28} label="Chargement de la une" />
+        <Loading lines={1} height={260} />
+      </div>
+      {[0, 1].map((k) => (
+        <section key={k}>
+          <div className="sh">
+            <span className="skel" style={{ height: 18, width: 180 }} />
+          </div>
+          <div className="cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <Loading key={i} lines={3} height={14} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -261,10 +293,7 @@ export default function HomePage() {
       <h1 className="sr-only">À la une</h1>
       <div className="vr">
         {data.data === null && !data.error ? (
-          <div className="split-lead">
-            <Loading lines={5} height={28} />
-            <Loading lines={1} height={260} />
-          </div>
+          <HomeSkeleton />
         ) : !archiveMode ? (
           <EventLead ev={lead!} kickerExtra={front?.lead_reason === "7j" ? <span>7 derniers jours</span> : null} />
         ) : replay.data ? (

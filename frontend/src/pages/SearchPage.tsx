@@ -8,7 +8,7 @@ import { fmtDayTimeUtc, fmtInt, plural } from "../lib/format";
 import { highlight } from "../lib/highlight";
 import { LANG_CODE, LANG_ORDER, articlePath, dirOf } from "../lib/lang";
 import { themePath } from "../lib/themes";
-import { cleanComment, cleanSnippet } from "../lib/wikitext";
+import { cleanSnippet, cleanSummary, isRepetitive } from "../lib/wikitext";
 import { Choice, Pagination } from "../components/blocks";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { Coll, LangCode, MetaLine, SectionHeader, SourceNote } from "../components/text";
@@ -16,66 +16,103 @@ import { Coll, LangCode, MetaLine, SectionHeader, SourceNote } from "../componen
 const EXAMPLES = ["séisme", "Maroc", "élection", "football", "زلزال", "earthquake"];
 
 interface Group {
+  key: string;
   lang: Lang;
   title: string;
   theme: ThemeId | null;
   themeLabel: string | null;
   hits: SearchResult[];
+  /** Same edit summary on several articles (API group=1): the other titles. */
+  titles: string[];
+  textMatch: boolean;
 }
 
+/** One entry per article; identical summary-only hits on several articles become one entry. Text matches first. */
 function group(items: SearchResult[]): Group[] {
   const map = new Map<string, Group>();
   for (const it of items) {
-    const k = `${it.lang}:${it.title}`;
+    const summaryOnly = it.match_in === "résumé";
+    const multi = (it.articles_count ?? 1) > 1 && summaryOnly;
+    const k = multi ? `résumé:${it.lang}:${cleanSummary(it.comment)}` : `${it.lang}:${it.title}`;
     let g = map.get(k);
     if (!g) {
-      g = { lang: it.lang, title: it.title, theme: it.theme ?? null, themeLabel: it.theme_label ?? null, hits: [] };
+      g = {
+        key: k,
+        lang: it.lang,
+        title: it.title,
+        theme: it.theme ?? null,
+        themeLabel: it.theme_label ?? null,
+        hits: [],
+        titles: multi ? (it.titles ?? [it.title]) : [it.title],
+        textMatch: false,
+      };
       map.set(k, g);
     }
     g.hits.push(it);
+    if (it.match_in !== "résumé") g.textMatch = true;
   }
-  return [...map.values()];
+  // Stable sort: matches in the added text before summary-only matches (API order = score order otherwise).
+  return [...map.values()].sort((a, b) => Number(b.textMatch) - Number(a.textMatch));
 }
 
 function Result({ g, q }: { g: Group; q: string }) {
-  const best = g.hits[0];
-  const snippet = cleanSnippet(best.snippet);
-  const comment = cleanComment(best.comment);
+  const best = g.hits.find((h) => h.match_in !== "résumé") ?? g.hits[0];
+  // A list ("footballer (born 1990) … footballer …") is not a passage: try the next hit, else say so.
+  const cleaned = g.hits.map((h) => cleanSnippet(h.snippet)).filter((s) => s.length >= 20);
+  const candidates = cleaned.filter((s) => !isRepetitive(s));
+  const snippet = best.match_in === "résumé" ? "" : candidates[0] ?? "";
+  const listLike = !snippet && best.match_in !== "résumé" && cleaned.length > 0;
+  const comment = cleanSummary(best.comment);
   const latest = g.hits.reduce((a, h) => (h.timestamp > a ? h.timestamp : a), best.timestamp);
+  const multi = g.titles.length > 1;
   return (
     <li className="quote" style={{ paddingTop: 16 }}>
       <h3 className="t-20">
-        <Link to={articlePath(g.lang, g.title)} className="hl" dir={dirOf(g.lang)} lang={g.lang}>
-          {g.title}
-        </Link>
+        {multi ? (
+          <span>{comment || "Même résumé de modification"}</span>
+        ) : (
+          <Link to={articlePath(g.lang, g.title)} className="hl" dir={dirOf(g.lang)} lang={g.lang}>
+            {g.title}
+          </Link>
+        )}
       </h3>
       {snippet && (
         <p dir={dirOf(g.lang)} lang={g.lang} className="t-16" style={{ marginTop: 6, maxWidth: "68ch", overflowWrap: "anywhere" }}>
           {highlight(snippet, q)}
         </p>
       )}
-      {comment && (
-        <p className="t-14 muted" style={{ marginTop: 4 }}>
-          Résumé : <bdi dir="auto">{highlight(comment, q)}</bdi>
+      {listLike && <p className="t-14 muted" style={{ marginTop: 6 }}>Liste : le mot revient de nombreuses fois dans le texte ajouté.</p>}
+      {multi ? (
+        <p className="t-14" style={{ marginTop: 6, maxWidth: "68ch" }}>
+          {plural(g.titles.length, "article")} :{" "}
+          {g.titles.slice(0, 8).map((t, i) => (
+            <span key={t}>
+              {i > 0 && ", "}
+              <Link to={articlePath(g.lang, t)} dir={dirOf(g.lang)}>
+                {t}
+              </Link>
+            </span>
+          ))}
+          {g.titles.length > 8 ? ` et ${fmtInt(g.titles.length - 8)} autres` : ""}.
         </p>
+      ) : (
+        comment && (
+          <p className="t-14 muted" style={{ marginTop: 4 }}>
+            Résumé : <bdi dir="auto">{highlight(comment, q)}</bdi>
+          </p>
+        )
       )}
       <MetaLine
         className="num"
         items={[
           <LangCode lang={g.lang} />,
-          g.theme && g.themeLabel ? (
+          g.theme && g.themeLabel && !multi ? (
             <Link to={themePath(g.theme)} className="quiet">
               {g.themeLabel}
             </Link>
           ) : null,
           fmtDayTimeUtc(latest),
-          g.hits.length > 1 ? (
-            <Link to={articlePath(g.lang, g.title)}>
-              {plural(g.hits.length - 1, "autre passage", "autres passages")}
-            </Link>
-          ) : (
-            "1 passage"
-          ),
+          multi ? "trouvé dans le résumé" : g.textMatch ? (g.hits.length > 1 ? plural(g.hits.length, "passage") : "1 passage") : "trouvé dans le résumé seulement",
         ]}
       />
     </li>
@@ -94,7 +131,7 @@ export default function SearchPage() {
   const themes = usePolling((s) => api.themes(s).catch(() => null), null);
   const stats = useStats();
   const valid = q.length >= 2 && q.length <= 100;
-  const res = usePolling((s) => (valid ? api.search(q, { lang, theme, limit: 50 }, s) : Promise.resolve(null)), null, [q, lang, theme]);
+  const res = usePolling((s) => (valid ? api.search(q, { lang, theme, limit: 50, group: true }, s) : Promise.resolve(null)), null, [q, lang, theme]);
   const groups = useMemo(() => (res.data ? group(res.data.items) : []), [res.data]);
   const PER = 20;
   const [page, setPage] = useState(1);
@@ -187,7 +224,7 @@ export default function SearchPage() {
             <>
               <ul>
                 {shown.map((g) => (
-                  <Result key={`${g.lang}:${g.title}`} g={g} q={q} />
+                  <Result key={g.key} g={g} q={q} />
                 ))}
               </ul>
               <Pagination

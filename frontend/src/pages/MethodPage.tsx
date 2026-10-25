@@ -3,6 +3,8 @@ import { Link, useLocation } from "react-router-dom";
 import { useTitle } from "../hooks/useTitle";
 import { Coll, SourceNote } from "../components/text";
 import { Overview } from "./DataPage";
+import { useStats } from "../lib/stats";
+import { fmtInt } from "../lib/format";
 
 const TOC = [
   ["probleme", "Le problème"],
@@ -113,6 +115,7 @@ function Diagram() {
 
 export default function MethodPage() {
   useTitle("Méthode");
+  const stats = useStats();
   const { hash } = useLocation();
   useEffect(() => {
     if (hash) window.setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ block: "start" }), 50);
@@ -219,14 +222,17 @@ export default function MethodPage() {
           <Diagram />
 
           <h2 id="base">Ce que contient la base</h2>
-          <Overview />
+          <Overview compact />
           <p className="t-14 muted" style={{ marginTop: 8 }}>
             Le même tableau, avec chaque collection consultable document par document, est sur la page <Link to="/donnees">Données</Link>.
           </p>
 
           <h2 id="limites">Limites</h2>
           <ul>
-            <li>Les pages vues ne sont chargées que pour quelques heures autour du séisme d’Al Haouz : le fichier complet de 49 heures dépasse l’espace disque du projet.</li>
+            <li>
+              Les pages vues ne sont chargées que pour {stats.data ? `${fmtInt(stats.data.pageviews_hours_loaded)} heures sur 49` : "une partie des 49 heures"} autour du
+              séisme d’Al Haouz : le fichier complet de 49 heures dépasse l’espace disque du projet.
+            </li>
             <li>Le texte des révisions anglaises n’est pas toujours récupéré : la file du diff-worker donne la priorité à l’arabe, au français et aux articles actifs.</li>
             <li>Le flux a parfois été arrêté puis rattrapé ; pendant un rattrapage, des fenêtres de 5 minutes ont pu ne pas être analysées en direct.</li>
             <li>Un z-score élevé dit qu’un article est inhabituellement actif, pas pourquoi : guerre d’édition, vandalisme ou vrai événement.</li>

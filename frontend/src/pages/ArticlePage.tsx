@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api, ApiError, type Article, type Lang } from "../api";
-import { usePolling } from "../hooks/usePolling";
+import { useFeedStatus, usePolling } from "../hooks/usePolling";
 import { useTitle } from "../hooks/useTitle";
-import { fmtDay, fmtDayRange, fmtDayTimeUtc, fmtInt, fmtSigned, fmtTime, fmtTimeUtc, plural } from "../lib/format";
+import { fmtDay, fmtDayTimeUtc, fmtInt, fmtSigned, fmtTime, fmtTimeUtc, plural } from "../lib/format";
 import { LANG_NAME, dirOf, isLang, wikiName, wikiUrl } from "../lib/lang";
 import { reasonSentence, themePath, themeSourceSentence } from "../lib/themes";
 import { cleanComment, cleanSnippet, isRevert, textLength } from "../lib/wikitext";
@@ -33,28 +33,35 @@ function useArticleParams(): { lang: string; title: string } {
 }
 
 function EditsChart({ a }: { a: Article }) {
+  const feed = useFeedStatus();
+  const refT = feed.refTime ? new Date(feed.refTime).getTime() : null;
   const data = useMemo(() => {
     const map = new Map(a.timeline.map((p) => [new Date(p.t).getTime(), p.edits]));
     const keys = [...map.keys()].sort((x, y) => x - y);
     if (!keys.length) return { xs: [] as number[], vs: [] as number[] };
     const xs: number[] = [];
-    const last = keys[keys.length - 1];
+    // The axis runs to now (event time), so a silence since the last edit is visible.
+    const nowBucket = refT ? Math.floor(refT / BUCKET) * BUCKET : keys[keys.length - 1];
+    const last = Math.max(keys[keys.length - 1], nowBucket);
     const first = Math.min(keys[0], last - 35 * BUCKET); // at least 3 h so a few edits do not become wide blocks
     for (let t = first; t <= last; t += BUCKET) xs.push(t);
     return { xs, vs: xs.map((t) => map.get(t) ?? 0) };
-  }, [a.timeline]);
+  }, [a.timeline, refT]);
   const alertWindows = a.alerts.map((al) => [new Date(al.window_start).getTime(), new Date(al.window_end).getTime()]);
+  const isAlert = (i: number) => alertWindows.some(([s, e]) => data.xs[i] >= s - BUCKET && data.xs[i] < e);
+  const anyRed = data.xs.some((_, i) => isAlert(i) && data.vs[i] > 0);
   const total = data.vs.reduce((s, v) => s + v, 0);
   if (!data.xs.length)
     return (
       <EmptyState reason={a.stats.last_edit ? `Dernière modification : ${fmtDayTimeUtc(a.stats.last_edit)}.` : undefined}>Aucune modification ces dernières 24 heures.</EmptyState>
     );
+  const partial = refT !== null && refT < data.xs[data.xs.length - 1] + BUCKET;
   return (
     <ChartFrame
-      title={`Modifications par tranche de 5 min, de ${fmtTimeUtc(data.xs[0]).replace(" UTC", "")} à ${fmtTimeUtc(data.xs[data.xs.length - 1] + BUCKET)}${alertWindows.length ? " ; en rouge, les fenêtres d’alerte" : ""}`}
+      title={`Par tranche de 5 min, de ${fmtTime(data.xs[0])} à ${fmtTimeUtc(refT ?? data.xs[data.xs.length - 1] + BUCKET)}${anyRed ? " ; en rouge, les fenêtres d’alerte" : ""}`}
       source={
         <SourceNote>
-          collection <Coll name="edits" /> (MongoDB) : {fmtInt(total)} des {plural(a.stats.edits_total, "modification")} de l’article ont eu lieu ces 24 dernières heures (robots compris).
+          collection <Coll name="edits" /> (MongoDB) : {fmtInt(total)} des {plural(a.stats.edits_total, "modification")} de l’article sur cette période (robots compris).
         </SourceNote>
       }
     >
@@ -63,11 +70,12 @@ function EditsChart({ a }: { a: Article }) {
         values={data.vs}
         bucketMs={BUCKET}
         height={180}
+        partialLast={partial}
         xFormat={(t) => fmtTime(t)}
         tipTitle={(t) => `${fmtDay(t)}, ${fmtTime(t)}–${fmtTimeUtc(t + BUCKET)}`}
         unit="modifications"
-        ariaLabel={`${plural(total, "modification")} sur 24 heures.`}
-        highlight={(i) => alertWindows.some(([s, e]) => data.xs[i] >= s - BUCKET && data.xs[i] < e)}
+        ariaLabel={`${plural(total, "modification")} sur la période.`}
+        highlight={isAlert}
       />
     </ChartFrame>
   );
@@ -121,7 +129,12 @@ function EditsTable({ a }: { a: Article }) {
 function Why({ a }: { a: Article }) {
   const en = a.enrichment;
   if (!en) return <p className="t-14 muted">Cet article n’a pas encore été classé par l’enrichisseur (Wikipédia + Wikidata).</p>;
-  const sentence = reasonSentence(en.theme_reason, en.theme_label);
+  let sentence = reasonSentence(en.theme_reason, en.theme_label);
+  for (const l of [...en.instance_of, ...en.occupations]) {
+    if (sentence && l.label && l.label_lang && l.label_lang !== "fr" && sentence.includes(l.label)) {
+      sentence = sentence.replace(l.label, `${l.label} (en ${l.label_lang === "en" ? "anglais" : l.label_lang})`);
+    }
+  }
   return (
     <div className="stack-8">
       <p className="t-14">{themeSourceSentence(en.theme_source, en.theme_confidence)}</p>
@@ -146,6 +159,11 @@ export default function ArticlePage() {
   const lang = isLang(p.lang) ? (p.lang as Lang) : null;
   const st = usePolling((s) => (lang ? api.article(lang, p.title, s) : Promise.reject(new ApiError(400, "langue inconnue"))), 60000, [p.lang, p.title]);
   const a = st.data;
+  const pv = usePolling(
+    (s) => (a && lang && a.pageviews_count > 0 ? api.pageviews(lang, a.title, undefined, s).catch(() => null) : Promise.resolve(null)),
+    null,
+    [a?.title, a?.pageviews_count],
+  );
   useTitle(a ? a.title : p.title || "Article");
 
   if (!a) {
@@ -188,7 +206,9 @@ export default function ArticlePage() {
 
   const en = a.enrichment;
   const dir = dirOf(a.lang);
-  const descFr = en?.description_fr ?? null;
+  // French description: description_fr, or the description of a French article (it comes from frwiki).
+  const descFr = en?.description_fr ?? (a.lang === "fr" ? en?.description ?? null : null);
+  const pvTotal = pv.data ? pv.data.items.reduce((sum, i) => sum + i.views, 0) : null;
   const robots = a.stats.edits_total - a.stats.edits_human;
   // Quotes: at most 3, meaningful additions first (≥ 20 characters).
   const prose = (t: { added_text: string | null }) => {
@@ -210,12 +230,16 @@ export default function ArticlePage() {
         { label: "Première modification", value: a.stats.first_edit ? fmtDayTimeUtc(a.stats.first_edit) : "–" },
         { label: "Dernière modification", value: a.stats.last_edit ? fmtDayTimeUtc(a.stats.last_edit) : "–" },
         a.pageviews_count > 0
-          ? { label: "Pages vues", value: `${fmtInt(a.pageviews_count)} heures chargées` }
+          ? {
+              label: "Pages vues",
+              value: pvTotal !== null ? `${fmtInt(pvTotal)} vues` : `${fmtInt(a.pageviews_count)} heures chargées`,
+              note: pvTotal !== null ? `sur ${plural(a.pageviews_count, "heure chargée", "heures chargées")}` : undefined,
+            }
           : { label: "Pages vues", value: <span className="t-14 muted">non chargées pour cet article</span> },
       ]}
     />
   );
-  const photo = <WikiImage eager url={en?.thumbnail_url} lang={a.lang} title={a.title} alt={a.title} />;
+  const photo = <WikiImage eager url={en?.thumbnail_url} lang={a.lang} title={a.title} alt={a.title} creditData={en?.image_credit} />;
 
   return (
     <div>
@@ -233,14 +257,8 @@ export default function ArticlePage() {
         <h1 className="t-40" dir={dir} lang={a.lang} style={{ maxWidth: "28ch" }}>
           {a.title}
         </h1>
-        <p className="standfirst">
-          {descFr
-            ? descFr.charAt(0).toUpperCase() + descFr.slice(1)
-            : `${plural(a.stats.edits_total, "modification")} par ${plural(a.stats.distinct_users, "contributeur")} reçues par le flux${
-                a.stats.first_edit && a.stats.last_edit ? `, ${fmtDayRange(a.stats.first_edit, a.stats.last_edit)}` : ""
-              }.`}
-        </p>
-        {!descFr && en?.description && <ForeignDescription text={en.description} lang={a.lang === "fr" ? "en" : a.lang} />}
+        {descFr && <p className="standfirst">{descFr.charAt(0).toUpperCase() + descFr.slice(1)}</p>}
+        {!descFr && en?.description && <ForeignDescription text={en.description} lang={a.lang} />}
         <MetaLine
           items={[
             <LangCode lang={a.lang} />,
@@ -262,7 +280,15 @@ export default function ArticlePage() {
             <SectionHeader id="a-edits" title="Dernières modifications" right={a.edits.length ? `${fmtInt(a.edits.length)} plus récentes` : null} />
             {a.edits.length ? <EditsTable a={a} /> : <EmptyState>Aucune modification reçue par le flux pour cet article.</EmptyState>}
           </section>
-          {(a.events?.length ?? 0) > 0 && (
+          {(a.events?.length ?? 0) === 1 && a.events![0].title === a.title ? (
+            <p className="t-14">
+              Événement :{" "}
+              <Link to={`/evenement/${encodeURIComponent(a.events![0].id)}`}>
+                {a.events![0].title}
+              </Link>{" "}
+              →
+            </p>
+          ) : (a.events?.length ?? 0) > 0 ? (
             <section aria-labelledby="a-events">
               <SectionHeader id="a-events" title="Événements liés" />
               <ul>
@@ -271,9 +297,9 @@ export default function ArticlePage() {
                 ))}
               </ul>
             </section>
-          )}
+          ) : null}
           <section aria-labelledby="a-tl">
-            <SectionHeader id="a-tl" title="Activité des dernières 24 heures" />
+            <SectionHeader id="a-tl" title="Activité récente" />
             <EditsChart a={a} />
           </section>
           <section aria-labelledby="a-texts">

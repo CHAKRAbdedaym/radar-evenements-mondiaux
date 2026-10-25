@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { useFeedStatus, usePolling } from "../hooks/usePolling";
-import { publishStats } from "../lib/stats";
+import { publishStats, useStats } from "../lib/stats";
+import { refNow } from "../lib/clock";
 import { preloadStreamGaps } from "../lib/gaps";
 import { useStreamGaps } from "../lib/gaps";
 import { fmtBytes, fmtInt, fmtLongDay, fmtTimeUtc } from "../lib/format";
@@ -20,6 +21,7 @@ const NAV: { to: string; label: string; end?: boolean }[] = [
 
 function Masthead() {
   const feed = useFeedStatus();
+  const stats = useStats();
   return (
     <header className="mast">
       <Link to="/" className="mast-brand" aria-label="Radar d’événements mondiaux, à la une">
@@ -29,10 +31,12 @@ function Masthead() {
       <p className="mast-date num">
         {feed.refTime ? (
           <>
-            {fmtLongDay(feed.refTime)} · données jusqu’à {fmtTimeUtc(feed.refTime)}
+            {fmtLongDay(feed.refTime)} · {stats.error ? "données indisponibles" : `données jusqu’à ${fmtTimeUtc(feed.refTime)}`}
           </>
+        ) : stats.error ? (
+          <>{fmtLongDay(refNow())} · données indisponibles</>
         ) : (
-          "Wikipédia en arabe, français et anglais"
+          <span className="skel" style={{ height: 12, width: 260, display: "inline-block" }} />
         )}
       </p>
     </header>
@@ -70,7 +74,7 @@ function LiveStrip() {
   if (!d) {
     return (
       <div className="live" aria-live="polite">
-        {stats.error ? <span>Flux indisponible : l’API ne répond pas. Nouvel essai dans 10 s.</span> : <span className="skel" style={{ height: 12, width: 420, maxWidth: "80%" }} />}
+        {stats.error ? <span>Flux indisponible : l’API ne répond pas.</span> : <span className="skel" style={{ height: 12, width: 420, maxWidth: "80%" }} />}
       </div>
     );
   }

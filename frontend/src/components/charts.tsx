@@ -100,7 +100,7 @@ interface LineChartProps {
   ariaLabel: string;
   /** Show the end-label value ("EN 1 579"). */
   endValues?: boolean;
-  /** The last bucket is incomplete: dashed last segment + this note after the end label (e.g. "minute en cours"). */
+  /** The last bucket is incomplete: drawn as a hollow dot, not connected; end labels sit on the last complete bucket. */
   partialLast?: string;
 }
 
@@ -136,7 +136,7 @@ export function LineChart({
       ({ top, ticks } = linearTicks(max));
     }
     const left = axisWidth(ticks, fmtInt);
-    const endLabelW = Math.max(...series.map((s) => (s.label.length + (endValues ? 6 : 0)) * 7.2)) + 16 + (partialLast ? partialLast.length * 6.4 : 0);
+    const endLabelW = Math.max(...series.map((s) => (s.label.length + (endValues ? 6 : 0)) * 7.2)) + 16;
     const right = Math.max(24, endLabelW);
     const topPad = marker ? 26 : 10;
     const bottom = 26;
@@ -166,9 +166,10 @@ export function LineChart({
     let tail = "";
     const dots: [number, number][] = [];
     let run = 0;
+    let hollow: [number, number] | null = null;
     s.values.forEach((v, i) => {
-      if (partialLast && i === lastIdx && visible(v) && visible(s.values[i - 1] ?? null)) {
-        tail = `M${sx(xs[i - 1]).toFixed(1)},${sy(s.values[i - 1] as number).toFixed(1)}L${sx(xs[i]).toFixed(1)},${sy(v).toFixed(1)}`;
+      if (partialLast && i === lastIdx) {
+        if (visible(v)) hollow = [sx(xs[i]), sy(v)];
         return;
       }
       if (!visible(v)) {
@@ -182,17 +183,17 @@ export function LineChart({
       d += `${run ? "L" : "M"}${sx(xs[i]).toFixed(1)},${sy(v).toFixed(1)}`;
       run++;
     });
-    if (run === 1 && !tail) {
-      const j = s.values.length - 1;
-      dots.push([sx(xs[j]), sy(s.values[j] as number)]);
+    const lastReal = partialLast ? s.values.length - 2 : s.values.length - 1;
+    if (run === 1 && lastReal >= 0 && visible(s.values[lastReal])) {
+      dots.push([sx(xs[lastReal]), sy(s.values[lastReal] as number)]);
     }
-    return { s, d, dots, tail };
+    return { s, d, dots, tail, hollow: hollow as [number, number] | null };
   });
 
   // Direct end labels with collision avoidance (min 15px apart).
   const ends = series
     .map((s) => {
-      let i = s.values.length - 1;
+      let i = s.values.length - 1 - (partialLast ? 1 : 0);
       while (i >= 0 && !visible(s.values[i])) i--;
       if (i < 0) return null;
       const py = sy(s.values[i] as number);
@@ -304,10 +305,11 @@ export function LineChart({
             </g>
           )}
           {/* series */}
-          {paths.map(({ s, d, dots, tail }) => (
+          {paths.map(({ s, d, dots, tail, hollow }) => (
             <g key={s.key}>
               <path d={d} fill="none" stroke={s.color} strokeWidth={s.strokeWidth ?? 2} strokeLinejoin="round" strokeLinecap="round" />
               {tail && <path d={tail} fill="none" stroke={s.color} strokeWidth={s.strokeWidth ?? 2} strokeDasharray="3 3" />}
+              {hollow && <circle cx={hollow[0]} cy={hollow[1]} r={3} fill={CHART.surface} stroke={s.color} strokeWidth={1.5} />}
               {dots.map(([x, y], i) => (
                 <circle key={i} cx={x} cy={y} r={2.5} fill={s.color} />
               ))}
@@ -320,7 +322,6 @@ export function LineChart({
               <text x={e.x + 9} y={e.y + 4} fontSize={12} fontFamily={FONT} fill={CHART.ink} style={{ fontVariantNumeric: "tabular-nums" }}>
                 <tspan fontWeight={600}>{e.s.label}</tspan>
                 {endValues && <tspan fill={CHART.ink2}>{` ${fmtInt(e.v)}`}</tspan>}
-                {partialLast && e.i === lastIdx && <tspan fill={CHART.ink3}>{` ${partialLast}`}</tspan>}
               </text>
             </g>
           ))}
@@ -422,7 +423,10 @@ export function ColumnChart({
   const bw = Math.min(14, Math.max(1, slot - gap));
   const sy = (v: number) => topPad + plotH - (v / top) * plotH;
   const sxT = (t: number) => left + ((t - (xs[0] ?? 0)) / Math.max(1, bucketMs)) * slot;
-  const every = xTickEvery ?? Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 90))));
+  // Tick labels at least 48px apart (a "23:00" label is ~36px): thin them, keeping round steps for hours.
+  const minEvery = Math.max(1, Math.ceil(52 / Math.max(1, slot)));
+  const steps = bucketMs === 3600000 ? [1, 2, 3, 6, 12, 24] : [1, 2, 3, 6, 12, 24, 48, 96];
+  const every = steps.find((k) => k >= Math.max(minEvery, xTickEvery ?? 1)) ?? minEvery;
 
   return (
     <div className="chart" ref={ref} style={{ height }}>

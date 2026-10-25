@@ -173,15 +173,33 @@ export interface Article {
   events?: EventSummary[];
 }
 
+/** Commons author / licence of the page image (when the enricher found it). */
+export interface ImageCredit {
+  file?: string | null;
+  artist?: string | null;
+  license?: string | null;
+  license_url?: string | null;
+  file_page_url?: string | null;
+  source?: string | null;
+}
+
+export interface WdLabel {
+  qid: string;
+  label: string | null;
+  /** Language of `label` ("fr" | "en" …). */
+  label_lang?: string | null;
+}
+
 export interface Enrichment {
+  image_credit?: ImageCredit | null;
   qid: string | null;
   description: string | null;
   /** French Wikidata description, when it exists. */
   description_fr?: string | null;
   thumbnail_url: string | null;
   categories: string[];
-  instance_of: { qid: string; label: string | null }[];
-  occupations: { qid: string; label: string | null }[];
+  instance_of: WdLabel[];
+  occupations: WdLabel[];
   death_date: string | null;
   theme: ThemeId | null;
   theme_label: string | null;
@@ -204,6 +222,7 @@ export interface EventSummary {
   /** Language of `description` ("fr" | "en" | "ar"), when the API knows it. */
   description_lang?: Lang | null;
   thumbnail_url: string | null;
+  image_credit?: ImageCredit | null;
   first_seen: string | null;
   last_activity: string | null;
   peak_z: number | null;
@@ -337,6 +356,11 @@ export interface Replay {
 }
 
 export interface SearchResult extends Themed {
+  /** Where the words were found (API ≥ v2.2): in the added text or only in the edit summary. */
+  match_in?: "texte" | "résumé";
+  /** With group=1: number of articles sharing this edit summary, and their titles. */
+  articles_count?: number;
+  titles?: string[];
   id: string;
   lang: Lang;
   title: string;
@@ -467,8 +491,8 @@ export const api = {
 
   replayAlHaouz: (signal?: AbortSignal) => get<Replay>("/replay/alhaouz", undefined, signal),
 
-  search: (q: string, f: { lang?: Lang | null; theme?: ThemeId | null; limit?: number }, signal?: AbortSignal) =>
-    get<Search>("/search", { q, lang: f.lang, theme: f.theme, limit: f.limit ?? 20 }, signal),
+  search: (q: string, f: { lang?: Lang | null; theme?: ThemeId | null; limit?: number; group?: boolean }, signal?: AbortSignal) =>
+    get<Search>("/search", { q, lang: f.lang, theme: f.theme, limit: f.limit ?? 20, group: f.group ? 1 : undefined }, signal),
 
   frontpage: (signal?: AbortSignal) =>
     get<FrontPage>("/frontpage", undefined, signal).then((d) => {

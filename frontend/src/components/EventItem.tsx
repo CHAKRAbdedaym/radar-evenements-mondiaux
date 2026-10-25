@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { api, type EventSummary, type Lang } from "../api";
+import { api, type EventDetail, type EventSummary, type Lang } from "../api";
 import { useFeedStatus, usePolling } from "../hooks/usePolling";
-import { fmtDay, fmtDayRange, fmtInt, fmtTimeUtc, plural } from "../lib/format";
+import { fmtDay, fmtDayRange, fmtDayShort, fmtInt, fmtTimeUtc, plural } from "../lib/format";
 import { gapBuckets, useStreamGaps } from "../lib/gaps";
 import { LANG_NAME, LANG_ORDER, articlePath, dirOf } from "../lib/lang";
 import { eventPath } from "../lib/themes";
-import { cleanSnippet, isProse } from "../lib/wikitext";
+import { cleanSnippet, isProse, trimQuote } from "../lib/wikitext";
 import { WikiImage } from "./blocks";
 import { ChartFrame, ColumnChart, Sparkline } from "./charts";
 import { Kicker, LangCode, LangList, MetaLine, StatusLabel, Timestamp } from "./text";
@@ -54,9 +54,36 @@ const HISTORIC_COPY: Record<string, string> = {
 const HISTORIC_TITLE: Record<string, string> = { "alhaouz-2023": "Séisme d’Al Haouz (8 septembre 2023)" };
 export const displayTitle = (ev: EventSummary): string => HISTORIC_TITLE[ev.id] ?? ev.title;
 
-export function eventStandfirst(ev: EventSummary): string {
+/** Largest 5-minute count among the event's alerts (the one at peak_at when present). */
+export function peakEditsOf(d: EventDetail | null | undefined): number | null {
+  if (!d || !d.alerts.length) return null;
+  const at = d.event.peak_at;
+  const exact = at ? d.alerts.find((a) => a.window_end === at) : undefined;
+  return exact ? exact.edits : Math.max(...d.alerts.map((a) => a.edits));
+}
+
+/**
+ * A line that says what the meta line does not: the peak, the detector alerts and how long the event lasted.
+ * "Pic de 7 modifications en 5 minutes à 03:56 UTC, 6 alertes du détecteur, suivi depuis 6 h."
+ */
+export function peakLine(ev: EventSummary, peakEdits?: number | null): string | null {
+  if (!ev.peak_at) return null;
+  const sameDay = ev.last_activity && fmtDayShort(ev.peak_at) === fmtDayShort(ev.last_activity);
+  const when = `${sameDay ? "" : ` le ${fmtDayShort(ev.peak_at)}`} à ${fmtTimeUtc(ev.peak_at)}`;
+  const peak = peakEdits ? `Pic de ${plural(peakEdits, "modification")} en 5 minutes${when}` : `Pic d’activité${when}`;
+  const alerts = ev.alerts_count ? `, ${plural(ev.alerts_count, "alerte du détecteur", "alertes du détecteur")}` : "";
+  let span = "";
+  if (ev.first_seen && ev.last_activity) {
+    const h = (new Date(ev.last_activity).getTime() - new Date(ev.first_seen).getTime()) / 3600000;
+    const dur = h < 1 ? "moins d’une heure" : h < 48 ? `${Math.round(h)}\u00a0h` : `${Math.round(h / 24)}\u00a0jours`;
+    span = `, suivi ${ev.status === "en cours" ? "depuis" : "pendant"} ${dur}`;
+  }
+  return `${peak}${alerts}${span}.`;
+}
+
+export function eventStandfirst(ev: EventSummary, peakEdits?: number | null): string {
   if (ev.kind === "historique") return HISTORIC_COPY[ev.id] ?? frDescription(ev) ?? "Événement historique reconstitué à partir des vues horaires Wikipédia.";
-  return frDescription(ev) ?? eventFacts(ev);
+  return frDescription(ev) ?? peakLine(ev, peakEdits) ?? eventFacts(ev);
 }
 
 /** Small, labelled foreign-language description (object pages only). */
@@ -122,7 +149,7 @@ export function EventStandard({
   const live = ev.status === "en cours";
   return (
     <article className={`ev-std ${photo && ev.thumbnail_url ? "has-photo" : ""}`}>
-      {photo && <WikiImage url={ev.thumbnail_url} lang={img?.lang} title={img?.title} alt={ev.title} credit="none" />}
+      {photo && <WikiImage url={ev.thumbnail_url} lang={img?.lang} title={img?.title} alt={ev.title} credit="none" creditData={ev.image_credit} />}
       {showKicker ? (
         <Kicker theme={ev.theme} label={ev.theme_label} extra={hasStatus(ev) ? <span style={{ marginLeft: 12 }}><StatusLabel status={ev.status} /></span> : null} />
       ) : hasStatus(ev) ? (
@@ -135,7 +162,7 @@ export function EventStandard({
         </p>
       ) : null}
       <Headline ev={ev} className="t-20" />
-      <p className="ev-desc">{eventStandfirst(ev)}</p>
+      {(ev.kind === "historique" || frDescription(ev)) && <p className="ev-desc">{eventStandfirst(ev)}</p>}
       <div className="ev-foot">
         <MetaLine items={eventMeta(ev, { short: true })} />
         {live && ev.spark.some((v) => v > 0) && <Sparkline values={ev.spark} alert label={sparkLabel(ev)} />}
@@ -195,9 +222,9 @@ function SparkColumns({ ev }: { ev: EventSummary }) {
 }
 
 /** Three latest meaningful added texts + the event's articles (fills the lead's text column). */
-function LeadTexts({ ev }: { ev: EventSummary }) {
-  const st = usePolling((s) => api.event(ev.id, s), 60000, [ev.id]);
-  if (!st.data) return null;
+function LeadTexts({ detail }: { detail: EventDetail | null }) {
+  if (!detail) return null;
+  const st = { data: detail };
   const texts = st.data.texts
     .map((t) => ({ ...t, clean: cleanSnippet(t.added_text) }))
     .filter((t) => isProse(t.clean))
@@ -212,7 +239,7 @@ function LeadTexts({ ev }: { ev: EventSummary }) {
             <LangCode lang={t.lang} /> · {fmtTimeUtc(t.timestamp)}
           </span>
           <p className="line" dir={dirOf(t.lang)} lang={t.lang}>
-            {t.clean.slice(0, 220)}
+            {trimQuote(t.clean, 220)}
           </p>
         </li>
       ))}
@@ -241,36 +268,50 @@ export function EventLead({
   chart,
   size = "t-56",
   as = "h2",
+  hideTheme = false,
 }: {
   ev: EventSummary;
   kickerExtra?: ReactNode;
   chart?: ReactNode;
   size?: "t-56" | "t-40";
   as?: "h1" | "h2";
+  /** On a theme page the theme name is the page title: no theme kicker. */
+  hideTheme?: boolean;
 }) {
   const img = imageLang(ev);
+  const det = usePolling((s) => (ev.kind === "historique" ? Promise.resolve(null) : api.event(ev.id, s)), 60000, [ev.id]);
+  const peakEdits = peakEditsOf(det.data);
   const l = titleLang(ev);
   const H = as;
   const hasSpark = ev.kind !== "historique" && ev.spark.some((v) => v > 0);
   return (
-    <article className="ev-lead split-lead">
+    <article className={`ev-lead split-lead ${ev.thumbnail_url ? "has-photo" : ""}`}>
       <div>
-        <Kicker
-          theme={ev.theme}
-          label={ev.theme_label}
-          extra={
-            <>
+        {hideTheme ? (
+          hasStatus(ev) || kickerExtra ? (
+            <p className="kicker" style={{ display: "flex", gap: "0 12px", marginBottom: 12 }}>
               {hasStatus(ev) && <StatusLabel status={ev.status} />}
               {kickerExtra}
-            </>
-          }
-        />
+            </p>
+          ) : null
+        ) : (
+          <Kicker
+            theme={ev.theme}
+            label={ev.theme_label}
+            extra={
+              <>
+                {hasStatus(ev) && <StatusLabel status={ev.status} />}
+                {kickerExtra}
+              </>
+            }
+          />
+        )}
         <H className={size}>
           <Link to={eventPath(ev.id)} className="hl" dir={l === "ar" ? "rtl" : undefined} lang={HISTORIC_TITLE[ev.id] ? "fr" : l}>
             {displayTitle(ev)}
           </Link>
         </H>
-        <p className="standfirst">{eventStandfirst(ev)}</p>
+        <p className="standfirst">{eventStandfirst(ev, peakEdits)}</p>
         <MetaLine items={eventMeta(ev)} />
         {chart && <div className="ev-lead-chart">{chart}</div>}
         {ev.kind === "historique" ? (
@@ -278,12 +319,12 @@ export function EventLead({
             <Link to={eventPath(ev.id)}>Les vues heure par heure, en trois langues →</Link>
           </p>
         ) : (
-          <LeadTexts ev={ev} />
+          <LeadTexts detail={det.data} />
         )}
       </div>
       <div>
         {ev.thumbnail_url ? (
-          <WikiImage eager url={ev.thumbnail_url} lang={img?.lang} title={img?.title} alt={ev.title} width={960} />
+          <WikiImage eager url={ev.thumbnail_url} lang={img?.lang} title={img?.title} alt={ev.title} width={960} creditData={ev.image_credit} />
         ) : !chart && hasSpark ? (
           <SparkColumns ev={ev} />
         ) : null}

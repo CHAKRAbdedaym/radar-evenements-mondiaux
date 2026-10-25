@@ -8,8 +8,7 @@ import { themePath, themeSourceLabel } from "../lib/themes";
 import { ChartFrame, ColumnChart } from "../components/charts";
 import { EventCompact, EventLead, EventStandard, isLeadEligible } from "../components/EventItem";
 import { hourRange } from "../components/ReplayChart";
-import { firstNonZero } from "../lib/wikitext";
-import { useStreamGaps } from "../lib/gaps";
+import { gapBuckets, useStreamGaps } from "../lib/gaps";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { ArticleLink, Coll, LangCode, SectionHeader, SourceNote } from "../components/text";
 
@@ -77,9 +76,11 @@ export default function ThemePage() {
   const others = events.filter((e) => e !== lead);
   const live = others.filter((e) => e.status === "en cours");
   const past = others.filter((e) => e.status !== "en cours");
-  const tStart = Math.min(d.timeline.length - 1, firstNonZero(d.timeline.map((p) => p.edits)));
-  const timeline = d.timeline.slice(tStart);
+  // Same 24 h window as the lead chart; hours when the stream was down are a hatched band, not zeros.
+  const timeline = d.timeline;
   const xs = timeline.map((p) => new Date(p.t).getTime());
+  const gapInfo = gapBuckets(xs, timeline.map((p) => p.edits), 3600 * 1000, known);
+  const majors = events.filter(isLeadEligible);
   const refT = d.ref_time ? new Date(d.ref_time).getTime() : null;
   const partialHour = refT !== null && xs.length > 0 && refT < xs[xs.length - 1] + 3600 * 1000;
   const [allArts, setAllArts] = [showAll, setShowAll];
@@ -91,19 +92,19 @@ export default function ThemePage() {
         <p className="kicker">Thème</p>
         <h1 className="t-40">{d.label}</h1>
         <p className="standfirst num">
-          {d.counts.events === 0
-            ? "Aucun événement détecté pour l’instant"
-            : `${plural(d.counts.events, "événement")}, ${d.counts.active_events ? `dont ${fmtInt(d.counts.active_events)} en cours` : "aucun en cours"}`}{" "}
+          {majors.length === 0
+            ? "Aucun événement majeur"
+            : `${plural(majors.length, "événement majeur", "événements majeurs")}, ${d.counts.active_events ? `dont ${fmtInt(d.counts.active_events)} en cours` : "aucun en cours"}`}{" "}
           · {plural(d.counts.edits_24h, "modification")} en 24 h · {plural(d.counts.articles, "article classé", "articles classés")}
         </p>
       </header>
 
       <div className="vr">
         {lead ? (
-          <EventLead ev={lead} size="t-40" />
+          <EventLead ev={lead} size="t-40" hideTheme />
         ) : (
-          <EmptyState reason="Un événement apparaît quand le détecteur relève un pic anormal de modifications sur un article de ce thème.">
-            Aucun événement dans ce thème pour l’instant.
+          <EmptyState reason="Un événement majeur demande au moins 6 contributeurs, 2 langues ou 15 modifications ; les articles très modifiés sont listés plus bas.">
+            Aucun événement majeur détecté dans ce thème.
           </EmptyState>
         )}
 
@@ -120,7 +121,11 @@ export default function ThemePage() {
 
         {past.length > 0 && (
           <section aria-labelledby="th-past">
-            <SectionHeader id="th-past" title="Autres événements" right={plural(past.length, "événement")} />
+            <SectionHeader
+              id="th-past"
+              title={lead ? "Autres événements" : "Articles très modifiés, sans événement majeur"}
+              right={plural(past.length, lead ? "événement" : "article")}
+            />
             <ul className="cols-2" style={{ rowGap: 0 }}>
               {past.map((ev) => (
                 <EventCompact key={ev.id} ev={ev} />
@@ -179,14 +184,11 @@ export default function ThemePage() {
             <SectionHeader id="th-tl" title="Modifications par heure" />
             {xs.length ? (
               <ChartFrame
-                title={tStart > 0 ? `Depuis ${fmtTimeUtc(xs[0])}` : "24 dernières heures, UTC"}
+                title="24 dernières heures, UTC"
                 source={
                   <SourceNote>
-                    collection <Coll name="edits" />, articles de ce thème.{tStart > 0
-                      ? known.gaps.some((g) => xs[0] - 3600 * 1000 >= g.from && xs[0] - 3600 * 1000 < g.to)
-                        ? ` Flux interrompu avant ${fmtTimeUtc(xs[0])} : aucune modification reçue, toutes pages confondues.`
-                        : ` Aucune modification de ce thème avant ${fmtTimeUtc(xs[0])} sur les 24 dernières heures.`
-                      : ""}
+                    collection <Coll name="edits" />, articles de ce thème.
+                    {gapInfo.bands.length ? " Zone hachurée : flux interrompu, aucune modification reçue toutes pages confondues." : ""}
                     {partialHour ? " Dernière barre en pointillé : heure en cours, incomplète." : ""}
                   </SourceNote>
                 }
@@ -194,10 +196,12 @@ export default function ThemePage() {
                 <ColumnChart
                   xs={xs}
                   values={timeline.map((p) => p.edits)}
+                  bands={gapInfo.bands}
+                  skip={gapInfo.flags}
                   partialLast={partialHour}
                   bucketMs={3600000}
                   height={200}
-                  xTickEvery={xs.length > 12 ? 6 : 1}
+                  xTickEvery={3}
                   xFormat={(t) => fmtTimeUtc(t).replace(" UTC", "")}
                   tipTitle={hourRange}
                   unit="modifications"

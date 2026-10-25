@@ -95,7 +95,7 @@ const COLLS: CollInfo[] = [
       { key: "theme", label: "Thème", render: (d) => str(d.theme) },
       { hm: true, key: "theme_source", label: "Source", render: (d) => themeSourceLabel(d.theme_source as never) },
       { key: "qid", label: "Wikidata", render: (d) => <span className="mono">{str(d.qid)}</span> },
-      { hm: true, key: "enriched_at", label: "Enrichi le", render: (d) => date(d.enriched_at) },
+      { hm: true, key: "enriched_at", label: "Enrichi le*", render: (d) => date(d.enriched_at) },
     ],
   },
   {
@@ -107,7 +107,7 @@ const COLLS: CollInfo[] = [
       { key: "label_fr", label: "Libellé (fr)", render: (d) => str(d.label_fr) },
       { hm: true, key: "label_en", label: "Libellé (en)", render: (d) => str(d.label_en) },
       { hm: true, key: "p31", label: "Nature (P31)", render: (d) => <span className="mono">{Array.isArray(d.p31) ? d.p31.slice(0, 3).join(", ") : "–"}</span> },
-      { key: "fetched_at", label: "Téléchargé le", render: (d) => date(d.fetched_at) },
+      { key: "fetched_at", label: "Téléchargé le*", render: (d) => date(d.fetched_at) },
     ],
   },
   {
@@ -136,7 +136,7 @@ const COLLS: CollInfo[] = [
     what: "Pic anormal détecté sur un article (fenêtre de 5 min).",
     source: "calculé par le détecteur",
     columns: [
-      { key: "created_at", label: "Créée le", render: (d) => date(d.created_at) },
+      { key: "created_at", label: "Créée le*", render: (d) => date(d.created_at) },
       { key: "lang", label: "Langue", render: (d) => lang(d.lang) },
       { key: "title", label: "Article", render: title },
       { key: "z_score", label: "z-score", r: true, render: (d) => (typeof d.z_score === "number" ? fmtZ(d.z_score) : "–") },
@@ -155,7 +155,7 @@ const COLLS: CollInfo[] = [
     what: "Dernier score du détecteur pour chaque article actif (expire après 1 h).",
     source: "calculé par le détecteur",
     columns: [
-      { key: "computed_at", label: "Calculé le", render: (d) => date(d.computed_at) },
+      { key: "computed_at", label: "Calculé le*", render: (d) => date(d.computed_at) },
       { key: "lang", label: "Langue", render: (d) => lang(d.lang) },
       { key: "title", label: "Article", render: title },
       { key: "z_score", label: "z-score", r: true, render: (d) => (typeof d.z_score === "number" ? fmtZ(d.z_score) : "–") },
@@ -170,7 +170,7 @@ const COLLS: CollInfo[] = [
       { key: "_id", label: "Identifiant", render: (d) => <span className="mono">{str(d._id)}</span> },
       { key: "source", label: "Service", render: (d) => str(d.source) },
       { hm: true, key: "status", label: "État", render: (d) => str(d.status) },
-      { key: "updated_at", label: "Mis à jour", render: (d) => date(d.updated_at ?? d.finished_at) },
+      { key: "updated_at", label: "Mis à jour*", render: (d) => date(d.updated_at ?? d.finished_at) },
     ],
   },
 ];
@@ -190,7 +190,7 @@ async function loadOverview(signal: AbortSignal) {
   return res;
 }
 
-export function Overview({ onPick }: { onPick?: (c: CollectionName) => void }) {
+export function Overview({ onPick, compact = false }: { onPick?: (c: CollectionName) => void; compact?: boolean }) {
   const stats = useStats();
   const st = usePolling(loadOverview, 60000);
   if (!st.data) return st.error ? <ErrorState error={st.error} onRetry={st.refresh} retryMs={60000} /> : <Loading lines={9} />;
@@ -205,8 +205,8 @@ export function Overview({ onPick }: { onPick?: (c: CollectionName) => void }) {
               <th>Nature</th>
               <th className="r">Documents</th>
               <th className="r">Taille</th>
-              <th className="hide-m">Contenu</th>
-              <th className="hide-m">Source</th>
+              {!compact && <th className="hide-m">Contenu</th>}
+              {!compact && <th className="hide-m">Source</th>}
             </tr>
           </thead>
           <tbody>
@@ -226,8 +226,8 @@ export function Overview({ onPick }: { onPick?: (c: CollectionName) => void }) {
                   <td className="nw">{r.e ? KIND_FR[r.e.data_kind] : "–"}</td>
                   <td className="r">{r.e ? fmtInt(r.e.count) : <span className="faint">pas encore créée</span>}</td>
                   <td className="r">{r.e ? fmtBytes(r.e.size_bytes) : "–"}</td>
-                  <td className="hide-m">{info.what}</td>
-                  <td className="hide-m muted">{info.source}</td>
+                  {!compact && <td className="hide-m">{info.what}</td>}
+                  {!compact && <td className="hide-m muted">{info.source}</td>}
                 </tr>
               );
             })}
@@ -280,7 +280,7 @@ function ClassificationBlock({ c }: { c: Classification }) {
         </div>
         <SourceNote>
           collection <Coll name="articles" />, champ <code>theme</code>
-          {c.last_enriched_at ? `, dernier article enrichi le ${fmtDayTimeUtc(c.last_enriched_at)}` : ""}.
+          {c.last_enriched_at ? `, dernier article enrichi le ${fmtDay(c.last_enriched_at)} (horloge du serveur)` : ""}.
         </SourceNote>
       </div>
       <div className="stack-24">
@@ -334,6 +334,8 @@ function Browser({ name }: { name: CollectionName }) {
   const days = new Set((d?.docs ?? []).map((doc) => (isIso(doc[firstKey]) ? fmtDay(doc[firstKey] as string) : "")));
   sameDayMode = days.size === 1 && !days.has("");
   const dayCaption = sameDayMode ? [...days][0] : null;
+  const hasTitle = info.columns.some((c) => c.key === "title" || c.key === "titles");
+  const hasProcessingTime = info.columns.some((c) => c.label.endsWith("*"));
   return (
     <div>
       <p className="t-14 muted" style={{ marginBottom: 12, maxWidth: "80ch" }}>
@@ -359,23 +361,45 @@ function Browser({ name }: { name: CollectionName }) {
               <thead>
                 <tr>
                   {info.columns.map((c, k) => (
-                    <th key={c.key} className={`${c.r ? "r" : ""} ${c.hm ? "hide-m" : ""}`}>
+                    <th key={c.key} className={`${c.r ? "r" : ""} ${c.hm || (c.key === "lang" && hasTitle) ? "hide-m" : ""}`}>
                       {k === 0 && dayCaption ? `${c.label} (${dayCaption}, UTC)` : c.label}
                     </th>
                   ))}
-                  <th>Document</th>
+                  <th className={hasTitle ? "hide-m" : ""}>Document</th>
                 </tr>
               </thead>
               <tbody>
                 {d.docs.map((doc, i) => (
                   <Fragment key={String(doc._id ?? i)}>
                     <tr>
-                      {info.columns.map((c) => (
-                        <td key={c.key} className={`${c.r ? "r" : c.key === "title" || c.key === "titles" ? "title-cell" : ""} ${c.hm ? "hide-m" : ""}`}>
-                          {c.render ? c.render(doc) : str(doc[c.key])}
-                        </td>
-                      ))}
-                      <td className="nw">
+                      {info.columns.map((c) => {
+                        const isTitle = c.key === "title" || c.key === "titles";
+                        const sub = info.columns.filter((x) => x.hm);
+                        return (
+                          <td key={c.key} className={`${c.r ? "r" : isTitle ? "title-cell" : ""} ${c.hm || (c.key === "lang" && hasTitle) ? "hide-m" : ""}`}>
+                            {isTitle && hasTitle && isLangSafe(doc.lang) && (
+                              <span className="show-m">
+                                <LangCode lang={doc.lang} />{" "}
+                              </span>
+                            )}
+                            {c.render ? c.render(doc) : str(doc[c.key])}
+                            {isTitle && (
+                              <span className="show-m t-12 muted" style={{ display: undefined }}>
+                                <br />
+                                {sub.map((x) => (
+                                  <Fragment key={x.key}>
+                                    {x.label.replace("*", "")} : {x.render ? x.render(doc) : str(doc[x.key])} ·{" "}
+                                  </Fragment>
+                                ))}
+                                <button type="button" className="btn-text t-12" style={{ fontWeight: 400, color: "var(--ink-2)" }} onClick={() => setOpen(open === i ? null : i)}>
+                                  {open === i ? "masquer" : "JSON"}
+                                </button>
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td className={`nw ${hasTitle ? "hide-m" : ""}`}>
                         <button
                           type="button"
                           className="btn-text"
@@ -402,6 +426,9 @@ function Browser({ name }: { name: CollectionName }) {
               </tbody>
             </table>
           </div>
+          {hasProcessingTime && (
+            <p className="source">* Horloge du serveur (heure de traitement), à ne pas comparer avec l’heure des modifications Wikipédia.</p>
+          )}
           <Pagination
             page={page}
             pages={Math.ceil(d.count / limit)}

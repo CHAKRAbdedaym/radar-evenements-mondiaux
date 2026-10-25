@@ -10,7 +10,7 @@ export function themeSourceLabel(src: ThemeSource | null | undefined): string {
     case "mots-clés":
       return "mots-clés";
     case "inconnu":
-      return "aucun indice";
+      return "aucun indice (classé Autres)";
     default:
       return "non classé";
   }

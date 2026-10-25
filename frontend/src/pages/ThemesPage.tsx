@@ -36,7 +36,7 @@ function ThemesChart({ tl: raw }: { tl: ThemesTimeline }) {
   ];
   return (
     <ChartFrame
-      title={trimmed ? `Modifications humaines par heure depuis ${fmtTimeUtc(xs[0])}` : `Modifications humaines par heure, ${tl.hours} dernières heures`}
+      title={`${trimmed ? `Modifications humaines par heure depuis ${fmtTimeUtc(xs[0])}` : `Modifications humaines par heure, ${tl.hours} dernières heures`} ; dernière heure en cours (point creux), non comptée`}
       source={
         <SourceNote>
           collections <Coll name="edits" /> et <Coll name="articles" /> (MongoDB). Les {fmtInt(nonClasse)} modifications sur des articles pas encore classés ne sont
@@ -67,7 +67,9 @@ export default function ThemesPage() {
   const cls = usePolling((s) => api.classification(s).catch(() => null), 60000);
   const items = themes.data?.items ?? [];
   // The hourly sparkline only makes sense with at least 4 hours of data.
-  const showTrend = items.some((t) => t.trend.length - firstNonZero(t.trend) >= 4);
+  // Sparklines: from the first hour with data to the last COMPLETE hour (the current hour is dropped).
+  const trendOf = (v: number[]) => v.slice(firstNonZero(v), -1);
+  const showTrend = items.some((t) => trendOf(t.trend).length >= 4);
   const totals = useMemo(
     () => ({ events: items.reduce((a, t) => a + t.events, 0), active: items.reduce((a, t) => a + t.active_events, 0), articles: items.reduce((a, t) => a + t.articles, 0) }),
     [items],
@@ -126,8 +128,11 @@ export default function ThemesPage() {
                           <td className="r hide-m">{fmtInt(t.articles)}</td>
                           {showTrend && (
                             <td className="hide-m">
-                              {t.trend.length - firstNonZero(t.trend) >= 4 ? (
-                                <Sparkline values={t.trend.slice(firstNonZero(t.trend))} label={`${t.label} : modifications par heure`} />
+                              {trendOf(t.trend).length >= 4 ? (
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                                  <Sparkline values={trendOf(t.trend)} label={`${t.label} : modifications par heure, pic ${Math.max(...trendOf(t.trend))}`} />
+                                  <span className="t-12 muted nw">pic {fmtInt(Math.max(...trendOf(t.trend)))}</span>
+                                </span>
                               ) : (
                                 <span className="faint">–</span>
                               )}

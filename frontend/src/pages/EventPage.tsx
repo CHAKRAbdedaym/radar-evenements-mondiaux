@@ -7,13 +7,13 @@ import { fmtDayShort, fmtDayTimeUtc, fmtInt, fmtTime, fmtTimeUtc, fmtZ, plural }
 import { gapBuckets, useStreamGaps } from "../lib/gaps";
 import { LANG_CODE, LANG_ORDER } from "../lib/lang";
 import { reasonSentence, themePath, themeSourceSentence } from "../lib/themes";
-import { cleanComment, cleanSnippet, isProse, stripWikitext, textLength } from "../lib/wikitext";
+import { cleanSnippet, cleanSummary, isProse, stripWikitext, textLength } from "../lib/wikitext";
 import { LANG_COLOR } from "../styles/chart";
 import { AlertsTable } from "../components/AlertsTable";
 import { EditText, FactBox, WikiImage, type Fact } from "../components/blocks";
-import { ChartFrame, LineChart } from "../components/charts";
-import { ForeignDescription, displayTitle, eventStandfirst, imageLang, langNames, titleLang } from "../components/EventItem";
-import { PageviewsChart } from "../components/ReplayChart";
+import { ChartFrame, ColumnChart, LineChart } from "../components/charts";
+import { ForeignDescription, displayTitle, eventStandfirst, imageLang, langNames, peakEditsOf, titleLang } from "../components/EventItem";
+import { PageviewsChart, buildPageviewRows } from "../components/ReplayChart";
 import { EmptyState, ErrorState, Loading } from "../components/states";
 import { ArticleLink, Coll, ExtLink, Kicker, LangCode, LangList, LangText, MetaLine, SectionHeader, SourceNote, StatusLabel, Timestamp } from "../components/text";
 
@@ -34,6 +34,34 @@ function EditsChart({ d }: { d: EventDetail }) {
   const refT = feed.refTime ? new Date(feed.refTime).getTime() : null;
   const partial = refT !== null && xs.length > 0 && refT < xs[xs.length - 1] + bucketMs;
   const unitWord = bucketMin >= 60 ? "heure" : `tranche de ${bucketMin} min`;
+  if (bucketMin < 60) {
+    return (
+      <ChartFrame
+        title={`Modifications humaines par tranche de ${bucketMin} min, toutes langues (${langs.map((l) => LANG_CODE[l]).join(", ")})${partial ? " ; dernière tranche en cours" : ""}`}
+        source={
+          <SourceNote>
+            Wikimedia EventStreams, collection <Coll name="edits" /> (MongoDB). Robots exclus. Heures UTC.
+            {bands.length ? " Zone hachurée : aucune modification reçue par le flux, toutes pages confondues." : ""} Trait rouge : fenêtre du pic.
+          </SourceNote>
+        }
+      >
+        <ColumnChart
+          xs={xs}
+          values={totals}
+          bucketMs={bucketMs}
+          height={240}
+          bands={bands}
+          skip={flags}
+          partialLast={partial}
+          highlight={(i) => peak !== null && xs[i] <= peak && peak <= xs[i] + bucketMs}
+          xFormat={(t) => fmtTime(t)}
+          tipTitle={(t) => `${fmtDayTimeUtc(t)}, ${bucketMin} min`}
+          unit="modifications"
+          ariaLabel={`Modifications par tranche de ${bucketMin} minutes. Total : ${fmtInt(d.event.total_edits)}.`}
+        />
+      </ChartFrame>
+    );
+  }
   return (
     <ChartFrame
       title={`Modifications humaines par ${unitWord}, par langue`}
@@ -49,7 +77,7 @@ function EditsChart({ d }: { d: EventDetail }) {
         series={langs.map((l) => ({ key: l, label: LANG_CODE[l], color: LANG_COLOR[l], values: d.timeline.map((p, i) => (flags[i] ? null : p[l])) }))}
         bands={bands}
         height={260}
-        partialLast={partial ? (bucketMin >= 60 ? "heure en cours" : "en cours") : undefined}
+        partialLast={partial ? "heure en cours" : undefined}
         marker={peak && d.event.peak_z !== null ? { x: peak, label: `Pic · z ${fmtZ(d.event.peak_z)} · ${fmtTimeUtc(peak)}` } : null}
         xFormat={fmtX}
         xTicks={dayTicks?.filter((_, i) => i % step === 0)}
@@ -105,18 +133,29 @@ function Texts({ d }: { d: EventDetail }) {
               </h3>
               <div className="table-wrap">
                 <table className="dt">
+                  <thead>
+                    <tr>
+                      <th>Heure</th>
+                      <th className="r">Ajout</th>
+                      <th>Résumé</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {shownSmall.map(({ t, n }) => (
-                      <tr key={t.id}>
-                        <td className="nw">
-                          <LangCode lang={t.lang} /> {fmtTime(t.timestamp)}
-                        </td>
-                        <td className="r nw">{n ? `+${fmtInt(n)} caractère${n > 1 ? "s" : ""}` : "mise en forme"}</td>
-                        <td className="muted">
-                          <bdi dir="auto">{cleanComment(t.comment) || stripWikitext(t.added_text) || "–"}</bdi>
-                        </td>
-                      </tr>
-                    ))}
+                    {shownSmall.map(({ t, n }) => {
+                      const added = stripWikitext(t.added_text);
+                      const digitsOnly = added.length > 0 && !/\p{L}/u.test(added);
+                      return (
+                        <tr key={t.id}>
+                          <td className="nw">
+                            <LangCode lang={t.lang} /> {fmtTime(t.timestamp)}
+                          </td>
+                          <td className="r nw">{digitsOnly ? <span className="muted">chiffres mis à jour</span> : n ? `+${fmtInt(n)} caractère${n > 1 ? "s" : ""}` : "mise en forme"}</td>
+                          <td className="muted">
+                            <bdi dir="auto">{cleanSummary(t.comment) || "–"}</bdi>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -178,10 +217,18 @@ function PeaksTable({ d }: { d: EventDetail }) {
 
 function facts(d: EventDetail): Fact[] {
   const e = d.event;
+  const enSeries = d.pageviews.find((s) => s.lang === "en");
+  const enPeak = enSeries ? Math.max(0, ...enSeries.items.map((i) => i.views)) : 0;
   if (e.kind === "historique") {
     return [
       { label: "Date", value: e.first_seen ? fmtDayTimeUtc(e.first_seen) : "–" },
-      e.peak_views !== null ? { label: "Pic des vues", value: `${fmtInt(e.peak_views)} vues/h`, note: e.peak_at ? `${fmtDayTimeUtc(e.peak_at)}, trois langues additionnées` : undefined } : null,
+      e.peak_views !== null
+        ? {
+            label: "Pic des vues",
+            value: `${fmtInt(e.peak_views)} vues/h`,
+            note: `${e.langs.map((l) => LANG_CODE[l]).join(" + ")}${enPeak ? `, dont ${fmtInt(enPeak)} en anglais` : ""}${e.peak_at ? ` · ${fmtDayTimeUtc(e.peak_at)}` : ""}`,
+          }
+        : null,
       e.total_views !== null ? { label: "Vues sur les heures chargées", value: fmtInt(e.total_views) } : null,
       { label: "Langues", value: <LangList langs={e.langs} />, note: langNames(e.langs) },
     ].filter(Boolean) as Fact[];
@@ -280,7 +327,7 @@ export default function EventPage() {
             <p className="kicker">Événement</p>
             <h1 className="t-40">Événement introuvable</h1>
             <p className="standfirst">
-              Aucun événement ne porte l’identifiant <span className="mono">{id}</span> dans la collection <Coll name="events" />.
+              Aucun événement ne porte l’identifiant « <span className="mono">{id}</span> » dans la collection <Coll name="events" />.
             </p>
           </header>
           <EmptyState reason="Les événements sont créés par le détecteur à partir des alertes ; un identifiant ancien a pu être fusionné avec un autre événement.">
@@ -319,7 +366,7 @@ export default function EventPage() {
         {title}
       </h1>
       <p className="standfirst" style={{ marginTop: 12 }}>
-        {eventStandfirst(e)}
+        {eventStandfirst(e, peakEditsOf(d))}
       </p>
       {!historic && <ForeignDescription text={e.description_lang !== "fr" ? e.description : null} lang={e.description_lang ?? (e.description ? "en" : null)} />}
       <MetaLine
@@ -339,7 +386,7 @@ export default function EventPage() {
         <>
           <div className="page-head">{head}</div>
           <div className="show-m-block stack-16" style={{ marginBottom: 32 }}>
-            <WikiImage eager url={e.thumbnail_url} lang={img?.lang} title={img?.title} alt={title} />
+            <WikiImage eager url={e.thumbnail_url} lang={img?.lang} title={img?.title} alt={title} creditData={e.image_credit} />
             {factBox}
           </div>
         </>
@@ -361,8 +408,8 @@ export default function EventPage() {
                     title="Vues horaires (ordinateur + mobile)"
                     source={
                       <SourceNote>
-                        fichiers horaires pageviews de Wikimedia (dumps.wikimedia.org), collection <Coll name="pageviews" /> (MongoDB). Heures non chargées
-                        hachurées.
+                        fichiers horaires pageviews de Wikimedia (dumps.wikimedia.org), collection <Coll name="pageviews" /> (MongoDB).
+                        {buildPageviewRows(d.pageviews).bands.length ? " Heures non chargées hachurées." : ""}
                       </SourceNote>
                     }
                   >
@@ -411,6 +458,19 @@ export default function EventPage() {
                   <EmptyState>Aucune alerte rattachée.</EmptyState>
                 )}
               </section>
+              {d.editors_top.length > 0 && (
+                <section aria-labelledby="ev-users">
+                  <SectionHeader id="ev-users" title="Contributeurs les plus actifs" right="modifications humaines" />
+                  <ul className="cols-2" style={{ rowGap: 0 }}>
+                    {d.editors_top.map((u) => (
+                      <li key={u.user} className="t-14" style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--rule)" }}>
+                        <bdi className="break">{u.user}</bdi>
+                        <span className="num muted nw">{plural(u.edits, "modification")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </>
           )}
         </div>
@@ -418,29 +478,12 @@ export default function EventPage() {
         <aside className="stack-24" aria-label="Repères">
           {hasPhoto && (
             <div className="hide-m-block stack-24">
-              <WikiImage eager url={e.thumbnail_url} lang={img?.lang} title={img?.title} alt={title} />
+              <WikiImage eager url={e.thumbnail_url} lang={img?.lang} title={img?.title} alt={title} creditData={e.image_credit} />
               {factBox}
             </div>
           )}
           {!historic && <OnWikipedia d={d} />}
           {!historic && <WhyTheme d={d} />}
-          {d.editors_top.length > 0 && (
-            <section>
-              <SectionHeader as="h3" title="Contributeurs les plus actifs" thin />
-              <table className="dt" style={{ background: "transparent" }}>
-                <tbody>
-                  {d.editors_top.map((u) => (
-                    <tr key={u.user}>
-                      <td className="break">
-                        <bdi>{u.user}</bdi>
-                      </td>
-                      <td className="r">{plural(u.edits, "modification")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          )}
           <p className="source">
             Objet <span className="mono">{e.id}</span> de la collection <Coll name="events" />, mis à jour par le détecteur.
           </p>

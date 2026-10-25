@@ -1407,7 +1407,6 @@ details.raw pre {
 }
 .quote blockquote[dir="rtl"] {
   max-width: 68ch;
-  margin-left: auto;
 }
 .page-head h1[lang="ar"],
 h1[lang="ar"],
@@ -1427,8 +1426,8 @@ a.hl[lang="ar"] {
   font-style: normal;
 }
 @media (max-width: 767px) {
-  .split-lead.ev-lead > :nth-child(2) {
-    order: -1;
+  .split-lead.ev-lead.has-photo > :nth-child(2) {
+    order: -1; /* only a photo goes above the headline on mobile, never a chart */
   }
   .live {
     flex-wrap: nowrap;
@@ -1585,4 +1584,16 @@ a.hl[lang="ar"] {
     border-top: 0;
     padding-top: 0;
   }
+}
+
+.meta .seg {
+  white-space: nowrap;
+}
+.lead-texts .line {
+  max-width: 68ch;
+}
+.body p,
+.sh-note,
+p.t-14.muted {
+  max-width: 68ch;
 }

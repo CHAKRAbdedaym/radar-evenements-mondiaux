@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { Lang } from "../api";
+import type { ImageCredit, Lang } from "../api";
 import { fmtDayTimeUtc, fmtInt } from "../lib/format";
 import { wikiName, wikiUrl } from "../lib/lang";
 import { cleanComment, isRevert, stripWikitext } from "../lib/wikitext";
@@ -38,7 +38,10 @@ export function WikiImage({
   className,
   eager = false,
   credit = "full",
+  creditData,
 }: {
+  /** Commons author / licence (API image_credit); without it the caption is only "Wikimedia Commons ↗". */
+  creditData?: ImageCredit | null;
   eager?: boolean;
   /** "full" on lead / object pages (file page link), "none" in lists (credit kept in the title attribute). */
   credit?: "full" | "none";
@@ -79,24 +82,35 @@ export function WikiImage({
         }}
       />
       {credit === "full" && (
-        <figcaption>
-          Image : Wikimedia Commons
-          {file ? (
-            <>
-              ,{" "}
-              <a href={file.href} target="_blank" rel="noreferrer" className="ext">
-                {file.name.length > 48 ? `${file.name.slice(0, 46)}…` : file.name}
-              </a>{" "}
-              (auteur et licence sur la page du fichier)
-            </>
+        <figcaption title={creditData?.file ?? file?.name ?? undefined}>
+          Image :{" "}
+          {creditData?.artist ? <>{creditData.artist.length > 60 ? `${creditData.artist.slice(0, 58)}…` : creditData.artist}, </> : null}
+          {creditData?.license ? (
+            creditData.license_url ? (
+              <>
+                <a href={creditData.license_url} target="_blank" rel="noreferrer">
+                  {creditData.license}
+                </a>
+                ,{" "}
+              </>
+            ) : (
+              <>{creditData.license}, </>
+            )
+          ) : null}
+          {creditData?.file_page_url || file ? (
+            <a href={creditData?.file_page_url ?? file!.href} target="_blank" rel="noreferrer" className="ext">
+              Wikimedia Commons
+            </a>
           ) : lang && title ? (
             <>
-              , via{" "}
+              Wikimedia Commons, via{" "}
               <a href={wikiUrl(lang, title)} target="_blank" rel="noreferrer" className="ext">
                 {wikiName(lang)}
               </a>
             </>
-          ) : null}
+          ) : (
+            "Wikimedia Commons"
+          )}
         </figcaption>
       )}
     </figure>
@@ -150,7 +164,7 @@ export function EditText({
   head?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const a = stripWikitext(added);
+  const a = stripWikitext(added).replace(/^[\s.,;:)\]»”…–—-]+/u, "");
   const rRaw = stripWikitext(removed);
   const r = rRaw.replace(/[\s–—\-.,;:|·]/g, "").length >= 2 ? rRaw : "";
   const revert = isRevert(comment);

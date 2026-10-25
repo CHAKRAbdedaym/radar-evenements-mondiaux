@@ -51,8 +51,8 @@ function MinuteChart({ tl }: { tl: Timeline }) {
   );
 }
 
-function Feed({ lang, bots }: { lang: Lang | null; bots: boolean }) {
-  const st = usePolling((s) => api.recentEdits({ lang, includeBots: bots, limit: 30 }, s), 5000, [lang, bots]);
+function Feed({ lang, bots, quiet }: { lang: Lang | null; bots: boolean; quiet?: boolean }) {
+  const st = usePolling((s) => api.recentEdits({ lang, includeBots: bots, limit: 20 }, s), 5000, [lang, bots]);
   const seen = useRef<Set<string>>(new Set());
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -63,7 +63,7 @@ function Feed({ lang, bots }: { lang: Lang | null; bots: boolean }) {
     ids.forEach((id) => seen.current.add(id));
     setFresh(neu);
   }, [st.data]);
-  if (!st.data) return st.error ? <ErrorState error={st.error} onRetry={st.refresh} retryMs={5000} /> : <Loading lines={12} />;
+  if (!st.data) return st.error && !quiet ? <ErrorState error={st.error} onRetry={st.refresh} retryMs={5000} /> : <Loading lines={12} />;
   if (!st.data.items.length) return <EmptyState>Aucune modification reçue pour ce filtre.</EmptyState>;
   return (
     <>
@@ -97,6 +97,8 @@ export default function LivePage() {
   const radar = usePolling((s) => api.radar({ lang, includeBots: !hideBots }, s), 10000, [lang, hideBots]);
   const alerts = usePolling((s) => api.alerts({ lang, limit: 50 }, s), 30000, [lang]);
   const liveCut = now - 2 * 3600 * 1000;
+  // API down and nothing received: one page-level error; the blocks keep their skeletons at final height.
+  const pageDown = !!tl.error && !tl.data && !!radar.error && !radar.data;
   const [allActive, setAllActive] = useState(false);
   // Top 20 by z-score (unknown last), then modifications.
   const sortedActive = useMemo(
@@ -146,18 +148,23 @@ export default function LivePage() {
         </div>
       </header>
 
+      {pageDown && (
+        <div style={{ marginBottom: 32 }}>
+          <ErrorState error={tl.error!} onRetry={() => [tl, radar, alerts].forEach((p) => p.refresh())} retryMs={10000} />
+        </div>
+      )}
       <div className="vr">
         <div className="split-main">
           <div className="vr">
             <section aria-labelledby="l-chart">
               <SectionHeader id="l-chart" title="Le rythme des modifications" right="actualisé toutes les 10 s" />
-              {!tl.data ? tl.error ? <ErrorState error={tl.error} onRetry={tl.refresh} retryMs={10000} /> : <Loading lines={1} height={280} /> : <MinuteChart tl={tl.data} />}
+              {!tl.data ? tl.error && !pageDown ? <ErrorState error={tl.error} onRetry={tl.refresh} retryMs={10000} /> : <Loading lines={1} height={280} /> : <MinuteChart tl={tl.data} />}
             </section>
 
             <section aria-labelledby="l-active">
               <SectionHeader id="l-active" title="Articles actifs, 5 dernières minutes" right={radar.data ? plural(radar.data.items.length, "article") : null} />
               {!radar.data ? (
-                radar.error ? <ErrorState error={radar.error} onRetry={radar.refresh} retryMs={10000} /> : <Loading lines={10} />
+                radar.error && !pageDown ? <ErrorState error={radar.error} onRetry={radar.refresh} retryMs={10000} /> : <Loading lines={10} />
               ) : !scored.length ? (
                 <EmptyState>Aucun article modifié dans les 5 dernières minutes.</EmptyState>
               ) : (
@@ -194,7 +201,7 @@ export default function LivePage() {
                             <td className={`r ${a.alert ? "accent" : ""}`} title={a.baseline_type ? `base ${a.baseline_type}` : "historique insuffisant"}>
                               {a.z_score === null ? <span className="faint">–</span> : fmtZ(a.z_score)}
                             </td>
-                            <td className="hide-m muted theme-cell">{a.theme_label ?? "non classé"}</td>
+                            <td className="hide-m muted theme-cell">{a.theme_label ?? <span className="faint">—</span>}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -206,7 +213,7 @@ export default function LivePage() {
                     </button>
                   )}
                   <SourceNote>
-                    collections <Coll name="edits" /> et <Coll name="scores" />, triés par z-score. z-score : écart à l’activité habituelle de l’article (« – » = pas encore calculé).
+                    collections <Coll name="edits" /> et <Coll name="scores" />, triés par z-score. Thème « — » : article pas encore classé. z-score : écart à l’activité habituelle de l’article (« – » = pas encore calculé).
                     Fenêtre terminée à <Timestamp iso={radar.data.time} />.
                   </SourceNote>
                 </>
@@ -216,7 +223,7 @@ export default function LivePage() {
 
           <aside aria-labelledby="l-feed">
             <SectionHeader id="l-feed" title="Le fil" right="toutes les 5 s" />
-            <Feed lang={lang} bots={!hideBots} />
+            <Feed lang={lang} bots={!hideBots} quiet={pageDown} />
           </aside>
         </div>
 
@@ -233,7 +240,7 @@ export default function LivePage() {
             nombre de modifications.
           </p>
           {!alerts.data ? (
-            alerts.error ? <ErrorState error={alerts.error} onRetry={alerts.refresh} retryMs={30000} /> : <Loading lines={8} />
+            alerts.error && !pageDown ? <ErrorState error={alerts.error} onRetry={alerts.refresh} retryMs={30000} /> : <Loading lines={8} />
           ) : !alerts.data.items.length ? (
             <EmptyState>Aucune alerte enregistrée.</EmptyState>
           ) : (

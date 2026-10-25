@@ -85,6 +85,24 @@ export default function ArchivePage() {
   const end = new Date(r.end).getTime();
   const expected = Math.round((end - start) / HOUR) + 1;
   const rows = buildPageviewRows(r.series, { start, end, full: true });
+  // Loaded hours before the quake where every language is at 0: one summary row in the default view.
+  const zeroRun = (() => {
+    const quakeHour = Math.floor(quake / HOUR) * HOUR;
+    let from = 0;
+    let to = 0;
+    let count = 0;
+    rows.xs.forEach((t, i) => {
+      if (t >= quakeHour) return;
+      const vals = rows.langs.map((l) => rows.values[l][i]);
+      if (vals.every((v) => v === null)) return;
+      if (vals.every((v) => v === 0)) {
+        if (!count) from = t;
+        to = t + HOUR;
+        count++;
+      }
+    });
+    return { from, to, count };
+  })();
   const ordered = LANG_ORDER.map((l) => r.series.find((s) => s.lang === l)).filter((s): s is Replay["series"][number] => !!s);
   const thumb = ev.data?.thumbnail_url ?? art.data?.enrichment?.thumbnail_url ?? null;
 
@@ -202,10 +220,21 @@ export default function ArchivePage() {
                   </tr>
                 </thead>
                 <tbody>
+                  {!allHours && zeroRun.count > 1 && (
+                    <tr>
+                      <td className="nw">
+                        {fmtDayShort(zeroRun.from)}, {fmtTime(zeroRun.from)}–{fmtTimeUtc(zeroRun.to)}
+                      </td>
+                      <td colSpan={rows.langs.length + 1} className="muted">
+                        0 vue dans les trois langues avant le séisme ({fmtInt(zeroRun.count)} heures chargées)
+                      </td>
+                    </tr>
+                  )}
                   {rows.xs.map((t, i) => {
                     const vals = rows.langs.map((l) => rows.values[l][i]);
                     const loaded = vals.some((v) => v !== null);
                     if (!allHours && !loaded) return null;
+                    if (!allHours && zeroRun.count > 1 && t < zeroRun.to) return null;
                     const isQuake = t === Math.floor(quake / HOUR) * HOUR;
                     return (
                       <tr key={t} className={isQuake ? "is-alert" : ""}>

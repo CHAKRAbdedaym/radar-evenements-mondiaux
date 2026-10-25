@@ -103,11 +103,14 @@ export function MetaLine({ items, className }: { items: ReactNode[]; className?:
       {parts.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (
-            <span className="sep" aria-hidden="true">
-              ·
-            </span>
+            <>
+              <wbr />
+              <span className="sep" aria-hidden="true">
+                ·
+              </span>
+            </>
           )}
-          {p}
+          <span className="seg">{p}</span>
         </Fragment>
       ))}
     </p>
