@@ -237,7 +237,7 @@ Documentation interactive : http://localhost:8000/docs
 
 ### 5.6 `frontend` — l’application
 
-Application web en français. Les pages sont décrites dans [`APP.md`](APP.md). <!-- partie b : pages et démo -->
+Application web en français. Les pages sont décrites dans [`APP.md`](APP.md).
 
 ### 5.7 `enricher` — donner un thème à chaque article
 
@@ -310,7 +310,7 @@ La professeure a demandé deux choses :
 1. **Classer les données par thème.** Un article ou un événement doit avoir un thème (catastrophe, sport, politique…), et ce thème doit venir de données réelles, pas d’une devinette.
 2. **Donner une page à chaque objet.** Un événement et un article doivent chacun avoir leur propre page, avec leur thème, leur chronologie et leurs sources.
 
-L’interface est en cours de refonte pour être plus sobre et plus lisible. Les pages seront décrites dans [`APP.md`](APP.md) une fois la refonte terminée. <!-- partie b : pages et démo -->
+L’interface a été refaite dans un style « journal » (fond papier, titres en serif, filets fins, une seule couleur d’accent pour le direct et les alertes), à la suite de la remarque « on dirait une interface faite par une IA ». Les règles sont dans [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md), l’avant/après dans [`docs/DESIGN_AUDIT.md`](docs/DESIGN_AUDIT.md) et les captures dans `qa/before/` et `qa/after/`.
 
 ### Ce qui a changé
 
@@ -541,7 +541,7 @@ Trois alertes ont été calculées juste après le retour du flux, quand l’his
 
 ### Vues horaires
 
-Dans `ingestion_log`, 18 heures ont été tentées pour le séisme (8 septembre 12 h → 9 septembre 05 h UTC) : **10 sont chargées** (8 septembre 12 h et 13 h, 20 h → 9 septembre 03 h UTC) et **8 sont en erreur** (8 septembre 14 h → 19 h, 9 septembre 04 h → 05 h), à cause de la connexion lente. Le replay du séisme utilise les 10 heures chargées. Les 8 autres peuvent être relancées (voir [`RUN.md`](RUN.md), section 4).
+Dans `ingestion_log`, **19 heures sont chargées** pour le séisme (8 septembre 12 h → 9 septembre 06 h UTC). Les 8 heures d’abord en erreur (connexion lente) ont été relancées avec succès le 25 octobre. Le replay du séisme utilise ces 19 heures.
 
 ---
 
@@ -583,7 +583,7 @@ Cet événement est aussi l'**événement historique** `alhaouz-2023` de la sect
 
 | V | Ce que cela veut dire | Comment nous le couvrons (chiffres réels) |
 |---|---|---|
-| **Volume** | Beaucoup de données | Les dumps de vues : **5 à 8,5 millions de lignes par heure**. Pour nos 10 heures chargées : **65 968 317 lignes lues**, **554 Mo** téléchargés en flux, **904 116 documents** écrits. Au 25 octobre : plus de **157 000 modifications**, **111 178 articles classés**. |
+| **Volume** | Beaucoup de données | Les dumps de vues : **5 à 8,5 millions de lignes par heure**. Pour nos 19 heures chargées : **127 279 742 lignes lues**, **1,07 Go** téléchargés en flux, **1 756 097 documents** écrits. Au 25 octobre : plus de **157 000 modifications**, **111 178 articles classés**. |
 | **Vélocité** | Données qui arrivent vite, en continu | Le flux EventStreams : **30 à 60 événements par seconde** sur tous les wikis, filtrés en direct. Le détecteur recalcule toutes les 60 s. L’enrichissement traite les nouveaux articles en continu, à 5 requêtes par seconde au maximum. |
 | **Variété** | Données de formes différentes | **Semi-structuré** (`edits`, `articles`, JSON), **non structuré** (`edit_texts`, texte libre), **structuré** (`pageviews`, table), **dérivé** (`events`). |
 
@@ -629,7 +629,7 @@ Mesure réelle sur **une heure** (8 septembre 2023, 22:00 UTC) :
 
 - **toutes les lignes sont quand même lues et comptées** (le volume est bien traité) ;
 - les titres du séisme sont **toujours gardés**, même avec moins de 20 vues ;
-- à cause d’une connexion très lente, **10 heures** sont chargées pour la démo : 8 septembre 12h–13h et 20h → 9 septembre 03h UTC (avant et après le séisme).
+- **19 heures** sont chargées pour la démo : 8 septembre 12 h → 9 septembre 06 h UTC (avant et après le séisme).
 
 **Pour lancer l’échelle réelle** (sur une machine avec ≥ 50 Go de disque et une bonne connexion) :
 
@@ -653,7 +653,7 @@ Le **flux en direct**, lui, garde **toutes** les modifications ar/fr/en (aucun s
 | Modifications stockées (`edits`) | 157 721 (en 124 249 · fr 21 838 · ar 11 634) |
 | Dont bots / humains | 41 251 / 116 470 |
 | Textes de modifications (`edit_texts`) | 71 221 |
-| Lignes de vues (`pageviews`) | 904 116 (10 heures) |
+| Lignes de vues (`pageviews`) | 1 756 097 (19 heures) |
 | Lignes de dumps lues | 65 968 317 (554 Mo téléchargés en flux) |
 | Articles classés (`articles`) | 111 178 (dont 882 pages supprimées) |
 | Éléments Wikidata en cache (`wikidata_entities`) | 117 008 |
@@ -671,7 +671,7 @@ Le **flux en direct**, lui, garde **toutes** les modifications ar/fr/en (aucun s
 - **Thèmes** : 31 % des articles sont en « Autres » (absence de données ou lieux). Un décès récent passe avant le métier. Les métiers hors de la correspondance vont en « Personnalités & décès ». Détails en section 9.
 - **Événements multi-langues** : le regroupement par qid existe, mais aucun événement détecté n’est encore actif dans plusieurs langues (section 10).
 - **Trou dans les données** : les modifications du 17 au 24 octobre 2026 manquent (section 11).
-- **Vues du séisme** : 10 heures chargées ; 8 heures en erreur à relancer (section 11).
+- **Vues du séisme** : 19 heures chargées sur les 49 de la période complète.
 - **Baseline provisoire** : il faut **au moins 6 heures** de flux continu pour que le détecteur compare chaque article à **sa propre** activité. Laisser tourner le flux avant la démo.
 - **Connexion lente** : si le réseau est lent, le flux prend du retard (l’application l’affiche). Rien n’est perdu quand le réseau revient, à condition que Wikimedia conserve encore les événements.
 - **Recherche** : elle porte sur les textes du flux en direct (2026), pas sur les textes de 2023.
@@ -723,20 +723,18 @@ Le code est déjà prêt pour ça : chaque service est indépendant, la configur
 
 ---
 
-<!-- partie b : pages et démo -->
 ## 20. Démo en 5 minutes
-
-Cette section sera réécrite avec les nouvelles pages (partie b de la phase finale).
 
 | # | Ouvrir | Dire |
 |---|---|---|
-| 1 | http://localhost:5173 — **Radar en direct** | « Chaque point est un article Wikipédia modifié dans les 5 dernières minutes, en arabe, français ou anglais. La taille = nombre de modifications. Les compteurs viennent de MongoDB et se mettent à jour toutes les 5 secondes. » |
-| 2 | **Alertes** | « Le détecteur calcule un z-score : combien de fois l’activité dépasse la normale de l’article. Au-delà de 3, avec au moins 3 contributeurs différents, c’est une alerte. » |
-| 3 | Cliquer un article | « Pour chaque article : la chronologie des modifications, le texte réellement ajouté (donnée non structurée) et ses vues. » |
-| 4 | **Rejouer : séisme d’Al Haouz** | « Voici des données réelles de septembre 2023 : 0 vue avant le séisme, plus de 1 500 vues par heure juste après. C’est le pic que notre radar doit détecter. » |
-| 5 | **Explorateur** + http://localhost:8081 | « Les 3 types de données sont dans MongoDB : semi-structuré, non structuré, structuré. Voici les documents bruts. » (voir [`MONGO.md`](MONGO.md)) |
-| 6 | **Recherche** | « Recherche plein texte dans le texte des modifications, grâce à un index texte MongoDB. » |
-| 7 | **Le projet** | « Les 3 V, l’architecture et la suite : Kafka, Spark, HDFS. » |
+| 1 | http://localhost:5173 — **À la une** | « La page d’accueil est organisée comme un journal : l’événement principal en haut, puis une rubrique par thème. Chaque événement vient d’une vraie alerte du détecteur sur Wikipédia, et son thème vient de Wikidata. » |
+| 2 | Cliquer l’événement principal → page **Événement** | « Chaque objet a sa page : description Wikidata, photo, repères (première détection, pic, z-score, contributeurs), activité par langue, textes réellement ajoutés, alertes, liens Wikipédia et Wikidata. » |
+| 3 | **Thèmes** puis un thème (ex. Sport) | « Les 10 thèmes avec leurs événements, leurs articles les plus modifiés et les modifications par heure. » |
+| 4 | **Données** + http://localhost:8081 | « Toutes les collections MongoDB, avec leur type : semi-structuré, non structuré, structuré. En bas : la répartition des thèmes et leur source (Wikidata ou mots-clés). » (voir [`MONGO.md`](MONGO.md)) |
+| 5 | **Archives : Al Haouz** | « Données réelles de septembre 2023 : presque 0 vue avant le séisme de 22:11 UTC, puis 1 579 vues par heure sur l’article anglais. C’est le pic que notre radar doit détecter. » |
+| 6 | **Méthode** | « Le problème, les sources, les 3 V, le calcul des thèmes, l’architecture et les limites. » |
+
+Autres pages : **En direct** (le flux et les articles actifs des 5 dernières minutes) et **Recherche** (plein texte, filtres par thème et par langue).
 
 Le détail de chaque page est dans [`APP.md`](APP.md).
 
