@@ -61,7 +61,7 @@ Goals (teacher feedback): (a) data organized by THEMES with a page for EACH OBJE
 | F3 | detector events + backfill + Al Haouz historique | ✅ done | commits 8c5b394, 6daddcd. Coverage-aware baseline (4 real segments, gap ≥ 15 min). --backfill-alerts: +32 real alerts (67). 3 alerts computed with the empty baseline after the gap flagged `invalid` (kept, excluded). 49 events (all with qid), alhaouz-2023 = Q122351413 historique (peak 1,969 views/h 2023-09-09 03:00). Lead « 2026 World Series » (sport, en cours). Mapping fix: politique 17.8 % → 6.8 % (communes = lieux → autres). |
 | F4 | backend endpoints v2 | ✅ done | commit a80fa05. /api/themes, /themes/timeline, /themes/classification, /themes/{id}, /events, /events/{id}, /frontpage; theme fields on live endpoints; background cache (warm 1–25 ms). api_check v2: 3,456 OK on real db (4 pre-existing/race). Re-verify with real events after F3. |
 | F5 | frontend rebuild (editorial) | ✅ done | commit 7f382a3. 10 pages, Tailwind/Recharts removed, tokens.css, self-hosted fonts, SVG charts, old URLs redirect. tsc 0 errors, no overflow, no console errors. |
-| F6 | design loop ≥ 3 rounds, every page ≥ 8/10 | 🟡 round 1 review | screenshots `qa/screenshots/round1/` (tool now waits for Wikimedia images, full height up to 9000 px). In parallel: French Wikidata descriptions for events. |
+| F6 | design loop ≥ 3 rounds, every page ≥ 8/10 | 🟡 round 3 in progress | R1 6.3/10 avg (review committed), fixes 050f4ee. R2 7.1/10 avg (archives 8, Al Haouz event 8; states reviewed). | screenshots `qa/screenshots/round1/` (tool now waits for Wikimedia images, full height up to 9000 px). In parallel: French Wikidata descriptions for events. |
 | F7 | full QA from clean build (keep volume) | ⏳ | qa-verifier |
 | F8 | README + docs | 🟡 part a done | commit 2999129: README §8–11 (nouveautés, calcul du thème, événements, qualité des données), MONGO.md (new collections + 8 verified queries T1–T8), RUN.md (enricher, detector CLIs, backup/restore, back to live). Snapshot 2026-10-25 05:25 UTC: articles 111,178 (wikidata 72.7 %, autres 31 % incl. 13,596 lieux), events 55. Part b (pages + démo) after the design loop. |
 | F9 | final report (FR) | ⏳ | orchestrator |
@@ -71,6 +71,7 @@ Goals (teacher feedback): (a) data organized by THEMES with a page for EACH OBJE
 - 2026-10-25 ~00:44: `detector --backfill-alerts` (+32 alerts), `--flag-invalid-alerts --apply` (3 alerts).
 - 2026-10-25 ~01:30–05:00: `enricher --backfill-descriptions` (description_fr on 72k entities).
 - 2026-10-25 05:17–05:24 (by docs-writer, out of scope, harmless): mongodump `backups/radar-20261025T0517-docs.archive.gz`, `--backfill-alerts` rerun (0 new), enricher stopped 3.5 min, `--reclassify` (3,183 of 110,296 articles changed after the mapping fixes), `--backfill-descriptions` (1 item). Enricher restarted 05:24.
+- 2026-10-25 10:11–11:20: pageviews-loader (detached) loaded the 8 missing hours → 19 hours 2023-09-08 12h → 09-09 06h, 1,756,097 rows. Al Haouz: EN peak 1,579 views/h at 09-09 00h; sum of 3 langs peak 2,037 at 06h, total 12,337.
 - 2026-10-25 ~05:35: pageviews-loader relaunched for the hours in error (2023-09-08 14–19 h, 09-09 04–05 h).
 
 ## Next (after restart: "read PROGRESS.md and continue")
