@@ -497,6 +497,7 @@ MongoDB `$text` on `edit_texts`, sorted by textScore.
             "snippet": "…texte autour du mot séisme…", "score": 1.2}]}
 ```
 `snippet`: ≤ 240 chars of `added_text` (or comment) around the first match (case-insensitive). Frontend highlights the query terms.
+**(v2.3)** Items add `match_in`: "texte" (terms found in the cleaned added_text, ≥ 25 chars) | "résumé" (comment only). Order: textScore × (1 texte, 0.3 résumé) within the best 1000 matches. Snippets are plain text (wikitext stripped). Optional `group=1`: identical comment-only results collapse into one item; every item then has `articles_count` and `titles` (≤ 5).
 
 ### `GET /api/explorer/{collection}?limit=20&skip=0` (whitelist: edits, edit_texts, pageviews, alerts, ingestion_log, scores, **(v2)** articles, events, wikidata_entities; limit ≤ 100)
 ```json

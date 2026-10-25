@@ -340,10 +340,23 @@ c, d = timed("search", "/api/search?q=football")
 check("search 200", c == 200)
 shape("search", d, {"q": S, "count": isint, "items": L})
 for it in d["items"][:3]:
-    shape("search.item", it, {"id": S, "lang": S, "title": S, "rev_new": isint, "timestamp": iso, "comment": (S, True), "snippet": S, "score": isnum})
+    shape("search.item", it, {"id": S, "lang": S, "title": S, "rev_new": isint, "timestamp": iso, "comment": (S, True), "snippet": S, "score": isnum,
+                                   "match_in": lambda v: v in ("texte", "résumé")})
     check("snippet <=240", len(it["snippet"]) <= 240 + 6, len(it["snippet"]))
-sc = [i["score"] for i in d["items"]]
-check("search sorted by score", sc == sorted(sc, reverse=True))
+# v2.2: text matches first, then summary-only matches; textScore order inside each group
+modes = [i["match_in"] for i in d["items"]]
+check("search texte before résumé", modes == sorted(modes, key=lambda m: m != "texte"))
+for m in ("texte", "résumé"):
+    sc = [i["score"] for i in d["items"] if i["match_in"] == m]
+    check(f"search {m} sorted by score", sc == sorted(sc, reverse=True))
+BADMARKS = ("{{", "}}", "[[", "]]", "'''")
+check("search snippets stripped of wikitext", all(not any(x in i["snippet"] for x in BADMARKS) for i in d["items"]))
+c, g, _, _ = get("/api/search?q=football&group=1&limit=50")
+check("search group=1 200", c == 200)
+for it in g["items"]:
+    check("search group item fields", isint(it.get("articles_count")) and isinstance(it.get("titles"), list) and len(it["titles"]) <= 5)
+comments = [i["comment"] for i in g["items"] if i["match_in"] == "résumé" and i["comment"]]
+check("search group: comment-only comments unique", len(comments) == len(set(comments)))
 check("search count == len", d["count"] == len(d["items"]))
 print("  search football:", d["count"], d["items"][0]["snippet"][:120] if d["items"] else None)
 for q, want in [("q=a", 400), ("q=", 400), ("", 400), ("q=" + "x" * 101, 400), ("q=x&limit=51", 400), ("q=football&limit=50", 200),
