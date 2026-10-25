@@ -7,3 +7,5 @@ dist/
 qa/screenshots/*.tmp
 *.log
 backups/
+qa/screenshots/check/
+qa/screenshots/round*/*.png
